@@ -1,0 +1,24 @@
+# Test harness for x2_greeter. Builds the vendor aimdk_msgs package from source
+# for x86_64 (the shipped prebuilts are aarch64-only, so CMake falls back to
+# full interface generation) and runs the @pytest.mark.ros tests against it.
+FROM ros:humble-ros-base
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3-pip \
+      python3-colcon-common-extensions \
+      python3-numpy \
+      python3-opencv \
+      python3-yaml \
+      ros-humble-cv-bridge \
+      ros-humble-sensor-msgs \
+      ros-humble-std-msgs \
+      ros-humble-geometry-msgs \
+      ros-humble-nav-msgs \
+      ros-humble-action-msgs \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m pip install --no-cache-dir "anthropic>=1.0" "pytest>=8"
+
+WORKDIR /ws
