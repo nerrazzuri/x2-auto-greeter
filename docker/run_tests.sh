@@ -45,4 +45,13 @@ echo "== pytest -m ros"
 # points and crash pytest>=8 during collection. We use none of their
 # fixtures, so disable both explicitly rather than downgrading pytest (which
 # would make the container's pytest diverge from the host's).
-exec python3 -m pytest src/x2_greeter/test -m ros -v -p no:cacheprovider -p no:launch_testing -p no:launch_ros "$@"
+python3 -m pytest src/x2_greeter/test -m ros -v -p no:cacheprovider -p no:launch_testing -p no:launch_ros "$@"
+
+# test_audio_tooling.py needs no ROS, but it locates tools/make_greeting_audio.py
+# by climbing four parents from its own file path, which only lands on the
+# repo root when the test runs from its original tree (REPO, bind-mounted),
+# not from the copy synced into WS above. Run it separately, from REPO, so
+# that path resolution — and the pyproject.toml pythonpath it relies on to
+# import x2_greeter — both work the same way they do on the host.
+echo "== pytest (non-ROS audio tooling, from $REPO)"
+(cd "$REPO" && python3 -m pytest x2_greeter_ws/src/x2_greeter/test/test_audio_tooling.py -v -p no:cacheprovider -p no:launch_testing -p no:launch_ros)
