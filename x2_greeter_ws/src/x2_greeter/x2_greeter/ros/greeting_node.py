@@ -245,10 +245,15 @@ class GreetingNode(Node):
             self.get_logger().warning('greeting worker still busy; skipping this confirm')
             return
 
-        frame = to_jpeg_frame(bgr) if self._needs_frame else None
-        ctx = SceneContext(distance_m=to_confirm.distance_m,
-                           center_offset=to_confirm.center_offset)
-        self._greeting_future = self._greeting_pool.submit(self._greet, frame, ctx)
+        try:
+            frame = to_jpeg_frame(bgr) if self._needs_frame else None
+            ctx = SceneContext(distance_m=to_confirm.distance_m,
+                               center_offset=to_confirm.center_offset)
+            self._greeting_future = self._greeting_pool.submit(self._greet, frame, ctx)
+        except Exception as exc:                       # noqa: BLE001 - one bad frame
+            self.get_logger().error(f'could not start the greeting worker: '
+                                     f'{type(exc).__name__}: {exc}')
+            return
 
     # ------------------------------------------------------------- greeting
 

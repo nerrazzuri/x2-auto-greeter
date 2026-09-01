@@ -154,6 +154,7 @@ def test_someone_too_far_away_is_not_greeted(ros):
     robot, node, executor, thread = build_rig(ros, robot_kwargs={'distance_mm': 5000})
     try:
         time.sleep(4.0)
+        assert node.frames.frames_seen > 0
         assert robot.tts_requests == []
         assert robot.motion_requests == []
     finally:
@@ -170,14 +171,92 @@ def test_a_failing_tts_falls_back_to_an_audio_file(ros):
         teardown_rig(robot, node, executor, thread)
 
 
-def test_no_image_reaches_the_robot_or_the_disk(ros):
-    """The canned path must not encode or transmit a frame at all."""
-    robot, node, executor, thread = build_rig(ros)
+def _load_privacy_guard_installer():
+    """Load test_privacy.py's `_install_no_disk_writes_guards` by file path.
+
+    This executes the real file test_privacy.py defines its tripwire in, so
+    the integration suite reuses the exact same, already self-tested guards
+    rather than a copy of them. Loading by path (instead of `import
+    test_privacy`) sidesteps pytest's rootdir/sys.path insertion, which only
+    puts test/ on sys.path when test_privacy.py itself gets collected in the
+    same run -- not guaranteed when this integration file is collected on
+    its own. test/test_privacy.py is not modified by this.
+    """
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / 'test_privacy.py'
+    spec = importlib.util.spec_from_file_location(
+        '_x2_greeter_reused_test_privacy', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module._install_no_disk_writes_guards
+
+
+def test_no_image_reaches_the_robot_or_the_disk(ros, monkeypatch):
+    """The canned path must not encode, transmit, or write a frame at all.
+
+    Reuses test_privacy.py's disk-write tripwire (open() in a writing mode,
+    Path.write_bytes/write_text, os.write/mkdir/makedirs, cv2.imwrite) armed
+    for a full greeting cycle driven through the real rig, not a synthetic
+    frame. Installed in before_spin so it is active before the first frame
+    is ever processed.
+    """
+    install_guards = _load_privacy_guard_installer()
+    captured = []
+
+    def inject(node):
+        captured.append(install_guards(monkeypatch))
+
+    robot, node, executor, thread = build_rig(ros, before_spin=inject)
     try:
         assert wait_until(lambda: bool(robot.tts_requests))
+        assert node.wait_for_idle_worker(10.0)
         assert node._needs_frame is False
         for request in robot.tts_requests:
             assert 'jpeg' not in request.tts_req.text.lower()
+        violations = captured[0]
+        assert violations == [], f'the canned greeting path wrote to disk: {violations}'
+    finally:
+        teardown_rig(robot, node, executor, thread)
+
+
+def test_no_image_reaches_the_disk_even_when_the_backend_encodes_one(ros, monkeypatch):
+    """Test 1b: the canned path above never builds a JPEG at all -- prove the
+    path that actually does (the claude backend) still writes nothing to
+    disk either. This is the case the reviewer's cv2.imwrite mutation lives
+    in: _on_frame runs for both providers, but only this one produces bytes.
+    """
+    monkeypatch.setenv('ANTHROPIC_API_KEY', 'sk-ant-dummy-not-a-real-key')
+
+    from x2_greeter.core.types import Verdict
+
+    install_guards = _load_privacy_guard_installer()
+    captured = []
+    received = []
+
+    class StubPolicy:
+        def compose(self, frame, ctx):
+            received.append(frame)
+            return Verdict(person_present=True, facing_robot=False, confidence=1.0,
+                           greeting='Hello there, from the stub.', reason='stub',
+                           source='claude', gesture=None)
+
+    def inject(node):
+        assert node._primary_name == 'claude', \
+            'test setup did not actually select the claude backend'
+        node.policy = StubPolicy()
+        captured.append(install_guards(monkeypatch))
+
+    robot, node, executor, thread = build_rig(
+        ros, extra_params=[('backend.provider', 'claude')], before_spin=inject)
+    try:
+        assert wait_until(lambda: bool(robot.tts_requests))
+        assert node.wait_for_idle_worker(10.0)
+        assert received and len(received[0].data) > 0, \
+            'the JPEG-encoding path was never exercised'
+        violations = captured[0]
+        assert violations == [], f'the image-encoding path wrote to disk: {violations}'
     finally:
         teardown_rig(robot, node, executor, thread)
 
@@ -231,7 +310,14 @@ def test_a_crashed_greeting_still_lets_the_next_person_be_greeted(ros):
         time.sleep(2.5)
         node.detector.set_detections(
             [RawDetection(bbox=BBox(270, 90, 370, 390), confidence=0.9)])
-        assert wait_until(lambda: node.greetings_dispatched >= 1), \
+        # The injected crash is in mode_guard.gesturing_allowed(), which runs
+        # *before* speech.speak() inside the same try block, so the crashing
+        # attempt never reaches speak() at all -- only the recovery attempt
+        # does. That makes exactly 1 tts_request the correct count here, not
+        # 2: >=1 still closes the hole the reviewer's mutation exposed
+        # (delete speak() entirely and tts_requests stays 0 forever while
+        # greetings_dispatched still reaches 1 from the gesture succeeding).
+        assert wait_until(lambda: node.greetings_dispatched >= 1 and len(robot.tts_requests) >= 1), \
             'the robot never greeted again after the crash'
     finally:
         teardown_rig(robot, node, executor, thread)
@@ -394,5 +480,69 @@ def test_the_claude_backend_receives_a_non_empty_jpeg_frame(ros, monkeypatch):
         frame = received[0]
         assert isinstance(frame, JpegFrame)
         assert len(frame.data) > 0
+    finally:
+        teardown_rig(robot, node, executor, thread)
+
+
+def test_it_speaks_but_does_not_gesture_at_someone_within_arms_reach(ros):
+    """GESTURE_MIN_DISTANCE_M (greeting_node.py) is a fixed 1.0 m floor, kept
+    deliberately independent of the tunable detect.distance_min_m gate --
+    that independence is the whole point of the constant, and until now
+    nothing in the suite put a person inside 1.0 m to prove it holds.
+
+    Lowering detect.distance_min_m to 0.3 is only what makes a person this
+    close visible to the detection gate at all; the interlock under test is
+    the separate, fixed 1.0 m floor enforced in _greet.
+    """
+    robot, node, executor, thread = build_rig(
+        ros,
+        robot_kwargs={'distance_mm': 700},
+        extra_params=[('detect.distance_min_m', 0.3)])
+    try:
+        assert wait_until(lambda: bool(robot.tts_requests)), 'the robot never spoke'
+        assert node.wait_for_idle_worker(10.0)
+        assert robot.motion_requests == []
+    finally:
+        teardown_rig(robot, node, executor, thread)
+
+
+def test_a_crash_before_the_verdict_still_recovers_and_greets_again(ros):
+    """A crash inside policy.compose -- before on_verdict is ever reached --
+    is a route Test A does not cover: _greet's crash-recovery `finally` only
+    runs once the tracker has reached GREETING, but a raise this early
+    leaves it stuck in CONFIRMING instead, with no such release. The only
+    way out is presence.confirm_timeout_s (10 s by default; every other
+    test's fast presence timings never touch it because they don't need to).
+
+    Set here to a sub-second value so the test proves the *mechanism*, not
+    the 10 s timing -- the real default is unchanged everywhere else.
+    """
+    from x2_greeter.core.presence import PresenceState
+
+    boom_calls = []
+
+    def inject(node):
+        original_compose = node.policy.compose
+
+        def boom_once(frame, ctx):
+            boom_calls.append(1)
+            if len(boom_calls) == 1:
+                raise RuntimeError('injected pre-verdict failure')
+            return original_compose(frame, ctx)
+
+        node.policy.compose = boom_once
+
+    robot, node, executor, thread = build_rig(
+        ros, before_spin=inject,
+        extra_params=[('presence.confirm_timeout_s', 0.5)])
+    try:
+        assert wait_until(lambda: bool(boom_calls)), 'policy.compose was never reached'
+        # The crash happened before on_verdict, so the tracker has no
+        # `finally` release here -- confirm_timeout_s is the only way out.
+        assert wait_until(lambda: node.tracker.state is PresenceState.IDLE, timeout_s=5.0), \
+            'the tracker never recovered through confirm_timeout_s'
+        assert wait_until(lambda: bool(robot.tts_requests)), \
+            'the robot never greeted after recovering'
+        assert node.wait_for_idle_worker(10.0)
     finally:
         teardown_rig(robot, node, executor, thread)

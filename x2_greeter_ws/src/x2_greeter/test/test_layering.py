@@ -75,10 +75,19 @@ def test_importing_the_package_does_not_pull_in_rclpy():
     assert init.read_text(encoding='utf-8').strip() == ''
 
 
+def module_name_for(path: Path) -> str:
+    """Build the dotted module name from the path relative to the package
+    root, rather than flattening to `x2_greeter.{layer}.{stem}` -- so this
+    keeps working if a subdirectory is ever added under core/ or cognition/.
+    """
+    rel = path.relative_to(PACKAGE_ROOT.parent).with_suffix('')
+    return '.'.join(rel.parts)
+
+
 @pytest.mark.parametrize('layer', ['core', 'cognition'])
 def test_every_layer_module_is_importable_without_ros(layer):
     import importlib
     for path in modules_under(layer):
         if path.name == '__init__.py':
             continue
-        importlib.import_module(f'x2_greeter.{layer}.{path.stem}')
+        importlib.import_module(module_name_for(path))
