@@ -47,6 +47,23 @@ tools/deploy_audio.sh assets/audio
 The script creates `/var/tmp/x2_greeter_audio` on PC3, world-readable. Confirm
 `speech.audio_dir` and `speech.audio_file_count` in `config/greeter.yaml` match.
 
+**Every parent directory, not just the leaf, must be readable/traversable by
+the account the audio service runs as.** The default is safe because
+`/var/tmp` is world-traversable (`1777`) on a stock system. If you override
+`DEST` — a home directory, a freshly created mount, anything outside
+`/var/tmp` — check the whole chain, not just the directory `deploy_audio.sh`
+`chmod`s:
+
+```bash
+namei -om /path/to/DEST
+```
+
+Every component from `/` down must show `r` and `x` for "other" (or the
+audio service's group). This is the trap when overriding `DEST`: a wrong
+permission here does not show up as an error anywhere — `PlayAudioFile`
+simply cannot open the file, and the failure looks identical to a missing or
+misnamed recording.
+
 ## 5. Set the API key
 
 ```bash

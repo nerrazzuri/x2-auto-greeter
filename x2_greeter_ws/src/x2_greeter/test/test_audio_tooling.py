@@ -64,6 +64,7 @@ def test_every_generated_file_is_playable_and_conformant(tmp_path, tool):
         with wave.open(str(path), 'rb') as handle:
             assert (handle.getnchannels(), handle.getsampwidth(),
                     handle.getframerate()) == (1, 2, 16000)
+            assert handle.getnframes() > 0
 
 
 def test_the_file_count_matches_the_speech_default(tool):

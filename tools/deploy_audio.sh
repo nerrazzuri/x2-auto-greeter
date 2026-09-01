@@ -27,7 +27,7 @@ echo "== deploying $count file(s) from $SRC to ${USER_NAME}@${PC3}:${DEST}"
 
 ssh "${USER_NAME}@${PC3}" "mkdir -p '${DEST}' && chmod 755 '${DEST}'"
 scp "$SRC"/greeting_*.wav "${USER_NAME}@${PC3}:${DEST}/"
-ssh "${USER_NAME}@${PC3}" "chmod 644 ${DEST}/greeting_*.wav && ls -l ${DEST}"
+ssh "${USER_NAME}@${PC3}" "chmod 644 '${DEST}'/greeting_*.wav && ls -l '${DEST}'"
 
 echo
 echo "== done. Confirm speech.audio_dir is ${DEST} in config/greeter.yaml"
