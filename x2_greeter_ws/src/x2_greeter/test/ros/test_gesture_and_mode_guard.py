@@ -86,6 +86,85 @@ def test_it_reports_failure_when_the_service_is_absent(ros):
         thread.join(timeout=5.0)
 
 
+def test_it_accepts_a_motion_that_is_already_running(ros):
+    """A non-zero code alongside state RUNNING still counts as accepted.
+
+    FakeRobot always returns code == 0, so this branch needs its own
+    test-local responder (the same pattern as RejectingAudioServer in
+    test_speech.py) rather than modifying FakeRobot, which Task 15 depends on.
+    """
+    from rclpy.executors import MultiThreadedExecutor
+    from rclpy.node import Node
+
+    from aimdk_msgs.msg import CommonState
+    from aimdk_msgs.srv import SetMcPresetMotion
+    from x2_greeter.ros.gesture import PRESET_MOTION_SERVICE
+
+    class RunningMotionServer(Node):
+        def __init__(self):
+            super().__init__('running_motion_server')
+            self.create_service(SetMcPresetMotion, PRESET_MOTION_SERVICE,
+                                self._on_preset_motion)
+
+        def _on_preset_motion(self, request, response):
+            response.response.header.code = 1
+            response.response.state.value = CommonState.RUNNING
+            response.response.task_id = 7
+            return response
+
+    server = RunningMotionServer()
+    caller = ros.create_node('running_motion_caller')
+    executor = MultiThreadedExecutor()
+    executor.add_node(server)
+    executor.add_node(caller)
+    thread = threading.Thread(target=executor.spin, daemon=True)
+    thread.start()
+    try:
+        assert gesture_dispatcher(caller).perform(1002, 2) is True
+    finally:
+        executor.shutdown()
+        caller.destroy_node()
+        server.destroy_node()
+        thread.join(timeout=5.0)
+
+
+def test_it_rejects_a_motion_the_robot_refuses(ros):
+    """A non-zero code with a state other than RUNNING is a genuine rejection."""
+    from rclpy.executors import MultiThreadedExecutor
+    from rclpy.node import Node
+
+    from aimdk_msgs.msg import CommonState
+    from aimdk_msgs.srv import SetMcPresetMotion
+    from x2_greeter.ros.gesture import PRESET_MOTION_SERVICE
+
+    class RejectingMotionServer(Node):
+        def __init__(self):
+            super().__init__('rejecting_motion_server')
+            self.create_service(SetMcPresetMotion, PRESET_MOTION_SERVICE,
+                                self._on_preset_motion)
+
+        def _on_preset_motion(self, request, response):
+            response.response.header.code = 1
+            response.response.state.value = CommonState.FAILURE
+            response.response.task_id = 9
+            return response
+
+    server = RejectingMotionServer()
+    caller = ros.create_node('rejecting_motion_caller')
+    executor = MultiThreadedExecutor()
+    executor.add_node(server)
+    executor.add_node(caller)
+    thread = threading.Thread(target=executor.spin, daemon=True)
+    thread.start()
+    try:
+        assert gesture_dispatcher(caller).perform(1002, 2) is False
+    finally:
+        executor.shutdown()
+        caller.destroy_node()
+        server.destroy_node()
+        thread.join(timeout=5.0)
+
+
 def test_gesturing_is_allowed_in_stand_default(rig):
     from aimdk_msgs.msg import McAction
 
