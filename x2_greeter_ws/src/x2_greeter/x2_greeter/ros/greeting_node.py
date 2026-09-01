@@ -40,8 +40,12 @@ GESTURE_MIN_DISTANCE_M = 1.0
 
 
 class GreetingNode(Node):
-    def __init__(self) -> None:
-        super().__init__('x2_greeter')
+    def __init__(self, **node_kwargs) -> None:
+        super().__init__('x2_greeter', **node_kwargs)
+        self._finish_init()
+
+    def _finish_init(self) -> None:
+        """Everything after Node.__init__, so tests can construct with overrides."""
         self._declare_parameters()
 
         self._callback_group = ReentrantCallbackGroup()
