@@ -13,11 +13,10 @@ from __future__ import annotations
 import os
 import random
 import threading
-from concurrent.futures import ThreadPoolExecutor
-from typing import Optional
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 
 import rclpy
-from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 
@@ -34,6 +33,11 @@ from x2_greeter.ros.gesture import GestureDispatcher
 from x2_greeter.ros.mode_guard import ModeGuard
 from x2_greeter.ros.speech import SpeechDispatcher
 
+#: Never gesture at somebody within arm's reach. This is a safety floor, not a
+#: tuning knob — it is deliberately independent of detect.distance_min_m, which
+#: operators may lower to notice people who step closer.
+GESTURE_MIN_DISTANCE_M = 1.0
+
 
 class GreetingNode(Node):
     def __init__(self) -> None:
@@ -41,6 +45,10 @@ class GreetingNode(Node):
         self._declare_parameters()
 
         self._callback_group = ReentrantCallbackGroup()
+        # Camera callbacks are serialised: the detector, the frame counter and
+        # the tracker are all shared mutable state, and a reentrant group would
+        # let two frames into detect() at once.
+        self._perception_group = MutuallyExclusiveCallbackGroup()
         self._tracker_lock = threading.Lock()
         self._greetings_dispatched = 0
 
@@ -102,7 +110,7 @@ class GreetingNode(Node):
             on_frame=self._on_frame,
             max_sync_skew_s=self._param('camera.max_sync_skew_s'),
             stale_warn_s=self._param('camera.stale_warn_s'),
-            callback_group=self._callback_group)
+            callback_group=self._perception_group)
 
         self.get_logger().info(
             f'x2_greeter up: detector={type(self.detector).__name__} '
@@ -263,39 +271,47 @@ class GreetingNode(Node):
             self.get_logger().info(f'not greeting: {verdict.reason or "no person"}')
             return
 
-        choice = self.selector.select(verdict.gesture)
-        allowed = self.mode_guard.gesturing_allowed()
-        if allowed and ctx.distance_m < self._gate_config.distance_min_m:
-            # Belt and braces: gating already refuses anyone closer than
-            # distance_min_m, but never gesture at somebody within arm's reach.
-            self.get_logger().warning(
-                f'person at {ctx.distance_m:.2f} m is too close to gesture')
-            allowed = False
-
-        self.get_logger().info(
-            f'greeting ({verdict.source}): {verdict.greeting!r} + {choice.name}')
-
-        gesture_future = None
-        if allowed:
-            gesture_future = self._action_pool.submit(
-                self.gesture.perform, choice.motion_id, choice.area_id)
-
-        # Speech and gesture are independent: if one service is down, the other
-        # still fires.
+        succeeded = False
         try:
-            self.speech.speak(verdict.greeting)
-        except Exception as exc:                       # noqa: BLE001
-            self.get_logger().error(f'speech failed: {type(exc).__name__}: {exc}')
+            choice = self.selector.select(verdict.gesture)
+            allowed = self.mode_guard.gesturing_allowed()
+            if allowed and ctx.distance_m < GESTURE_MIN_DISTANCE_M:
+                # This is the interlock itself, not belt and braces: it is a
+                # fixed safety floor, deliberately independent of the tunable
+                # detect.distance_min_m gate.
+                self.get_logger().warning(
+                    f'person at {ctx.distance_m:.2f} m is too close to gesture')
+                allowed = False
 
-        if gesture_future is not None:
+            self.get_logger().info(
+                f'greeting ({verdict.source}): {verdict.greeting!r} + {choice.name}')
+
+            gesture_future = None
+            if allowed:
+                gesture_future = self._action_pool.submit(
+                    self.gesture.perform, choice.motion_id, choice.area_id)
+
+            # Speech and gesture are independent: if one service is down, the
+            # other still fires.
             try:
-                gesture_future.result(timeout=15.0)
+                self.speech.speak(verdict.greeting)
             except Exception as exc:                   # noqa: BLE001
-                self.get_logger().error(f'gesture failed: {type(exc).__name__}: {exc}')
+                self.get_logger().error(f'speech failed: {type(exc).__name__}: {exc}')
 
-        with self._tracker_lock:
-            self.tracker.on_greeting_dispatched(self._now())
-        self._greetings_dispatched += 1
+            if gesture_future is not None:
+                try:
+                    gesture_future.result(timeout=15.0)
+                except Exception as exc:               # noqa: BLE001
+                    self.get_logger().error(f'gesture failed: {type(exc).__name__}: {exc}')
+            succeeded = True
+        except Exception as exc:                       # noqa: BLE001 - never wedge the tracker
+            self.get_logger().error(
+                f'greeting worker failed: {type(exc).__name__}: {exc}')
+        finally:
+            with self._tracker_lock:
+                self.tracker.on_greeting_dispatched(self._now())
+        if succeeded:
+            self._greetings_dispatched += 1
 
     # ----------------------------------------------------------------- misc
 
@@ -311,12 +327,12 @@ class GreetingNode(Node):
         try:
             future.result(timeout=timeout_s)
             return True
-        except Exception:                              # noqa: BLE001
+        except FutureTimeoutError:
             return False
 
     def destroy_node(self) -> bool:
-        self._greeting_pool.shutdown(wait=False)
-        self._action_pool.shutdown(wait=False)
+        self._greeting_pool.shutdown(wait=True)
+        self._action_pool.shutdown(wait=True)
         return super().destroy_node()
 
 
