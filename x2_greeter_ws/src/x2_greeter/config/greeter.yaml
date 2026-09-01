@@ -1,0 +1,66 @@
+# X2 auto-greeter parameters. Defaults follow the design spec, section 13.
+/**:
+  ros__parameters:
+    camera:
+      rgb_topic: /aima/hal/sensor/rgbd_head_front/rgb_image
+      depth_topic: /aima/hal/sensor/rgbd_head_front/depth_image
+      # Metres per depth unit. 0.001 for a 16UC1 millimetre image, 1.0 for
+      # 32FC1 metres. Confirm against the real camera on first hardware access.
+      depth_scale: 0.001
+      max_sync_skew_s: 0.15
+      stale_warn_s: 5.0
+
+    detect:
+      # mobilenet_ssd | hog | scripted. mobilenet_ssd falls back to hog with a
+      # warning when the weights are absent; run tools/fetch_model.py to get them.
+      detector: mobilenet_ssd
+      model_dir: ''
+      confidence_min: 0.5
+      distance_min_m: 1.0
+      distance_max_m: 3.0
+      center_tolerance: 0.25
+
+    presence:
+      dwell_s: 1.0
+      loss_grace_s: 0.5
+      clear_s: 3.0
+      cooldown_s: 30.0
+      reject_cooldown_s: 5.0
+      confirm_timeout_s: 10.0
+
+    backend:
+      # claude | canned. Named 'provider' rather than 'backend' because ROS 2
+      # forbids a parameter that is also a prefix of another parameter.
+      provider: claude
+      model: claude-opus-5
+      effort: low
+      timeout_s: 2.5
+
+    speech:
+      # auto | tts | audio_file
+      tier: auto
+      domain: x2_greeter
+      priority_level: 6
+      # Audio assets live on PC3 (10.0.1.42), world-readable.
+      audio_dir: /var/tmp/x2_greeter_audio
+      audio_file_count: 6
+      phrases_file: ''
+
+    gestures:
+      enabled:
+        - wave
+        - salute
+        - handshake
+        - raise_hand
+        - raise_both
+        - bow
+        - high_five
+        - wave_chest
+        - cheer
+        - blow_kiss
+        - heart
+      # left | right | both | random
+      hand_preference: right
+
+    safety:
+      require_stand_default: true

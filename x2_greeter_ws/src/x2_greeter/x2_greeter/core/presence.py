@@ -43,8 +43,9 @@ class PresenceConfig:
 class PresenceTracker:
     """Decides when to ask a backend, and when a greeting may happen.
 
-    Single-threaded by contract: the ROS executor calls update() and the
-    greeting worker's callbacks are marshalled back onto the same thread.
+    Not thread-safe. update() is called from the ROS executor and
+    on_verdict()/on_greeting_dispatched() from the greeting worker, so callers
+    must serialise access — GreetingNode holds a lock around every call.
     """
 
     def __init__(self, config: PresenceConfig) -> None:
