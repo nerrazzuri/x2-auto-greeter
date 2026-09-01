@@ -33,9 +33,20 @@ from x2_greeter.ros.gesture import GestureDispatcher
 from x2_greeter.ros.mode_guard import ModeGuard
 from x2_greeter.ros.speech import SpeechDispatcher
 
-#: Never gesture at somebody within arm's reach. This is a safety floor, not a
-#: tuning knob — it is deliberately independent of detect.distance_min_m, which
-#: operators may lower to notice people who step closer.
+#: The floor for the distance reading the node has, not a guarantee about
+#: where the greeted person actually is: gate_detections (core/detection.py)
+#: returns the most central gated detection, not the nearest, so a second
+#: person who stays gated further away can mask one who has stepped inside
+#: this floor. It is deliberately independent of detect.distance_min_m, which
+#: operators may lower to notice people who step closer -- but on the shipped
+#: config the two are equal, so the distance comparison here is unreachable:
+#: gate_detections has already rejected anything closer before this interlock
+#: sees it. The protection that actually fires in that configuration is
+#: staleness: a person who crosses inside this floor stops being gated, the
+#: latest reading ages past presence.loss_grace_s, and the gesture is refused
+#: on age. That makes presence.loss_grace_s load-bearing for this interlock,
+#: not just a responsiveness knob -- raising it weakens the arm's-reach
+#: protection under the shipped config.
 GESTURE_MIN_DISTANCE_M = 1.0
 
 

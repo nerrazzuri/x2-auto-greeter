@@ -109,7 +109,18 @@ the design spec, section 17.
 | Depth encoding | `ros2 topic echo --field encoding .../depth_image --once` | `16UC1` → `camera.depth_scale: 0.001`; `32FC1` → `1.0` |
 | Distance readings look right | stand at a tape-measured 2 m; the log prints the gated distance | adjust `camera.depth_scale` |
 | A person is detected | walk into frame; the log shows the state machine advancing | lower `detect.confidence_min`, or fetch the SSD weights |
+| Detection keeps up with `presence.loss_grace_s` (0.5 s shipped) | check this alongside `camera.depth_scale`: `_on_frame` runs `detector.detect()` on every synced frame with no throttling, so the distance-reading refresh cadence equals the detector's per-frame latency; watch the log for how often a fresh distance appears | if detection is slower than `loss_grace_s` — plausible for the HOG fallback, which is what runs whenever `detect.model_dir` is empty, as it ships — every reading is stale by the time a greeting reaches the gesture interlock, and **the robot speaks but never gestures, with no error anywhere**. It fails safe, and the log names both the age and the bound, so it is diagnosable once you know to look. Raising `loss_grace_s` makes the symptom go away but weakens the arm's-reach interlock; the real fix is faster detection (fetch the SSD weights, step 3) |
 | `PlayTts` works offline | pull the network, then greet | if it fails, set `speech.tier: audio_file` |
 | `PlayAudioFile` needs audio focus | force tier 3 and watch for a rejection | if so, call `RequestAudioFocus` first — currently not implemented |
 | Gesture timing | watch a full greeting | if speech and gesture desynchronise, tune per-gesture duration |
 | CPU headroom | `top` while the node runs | switch `detect.detector` to `hog`, or lower the frame rate |
+
+## 9. Safety notes
+
+- **The 1.0 m arm's-reach floor is not an absolute guarantee in a crowd.**
+  The node gestures toward the most central gated detection, not the
+  nearest one. If a second person stays gated further away while the
+  greeted person steps inside 1.0 m, the closer person can be masked: the
+  latest distance reading stays fresh and far, and the gesture fires with
+  somebody closer than the floor. Do not rely on the floor alone in a
+  crowded scene.

@@ -252,6 +252,48 @@ def test_it_reports_failure_when_the_header_is_clean_but_status_reports_failure(
         thread.join(timeout=5.0)
 
 
+def test_it_reports_success_when_only_the_header_reports_it(ros):
+    """A server that fills only the header is still understood as success.
+
+    status.value is left at its default (UNKNOWN, 0) and header.code is left
+    at its default (0) -- the mirror image of
+    test_it_reports_failure_when_the_header_is_clean_but_status_reports_failure.
+    A server that speaks only through the header, and cleanly, is the best
+    signal available from it, and must not be misread as a rejection.
+    """
+    from rclpy.executors import MultiThreadedExecutor
+    from rclpy.node import Node
+
+    from aimdk_msgs.srv import PlayAudioFile
+    from x2_greeter.ros.speech import AUDIO_SERVICE
+
+    class HeaderOnlySuccessServer(Node):
+        def __init__(self):
+            super().__init__('header_only_success_audio_server')
+            self.create_service(PlayAudioFile, AUDIO_SERVICE, self._on_play_audio_file)
+
+        def _on_play_audio_file(self, request, response):
+            # response.reponse.status.value left at its default (UNKNOWN);
+            # response.reponse.header.code left at its default (0).
+            return response
+
+    server = HeaderOnlySuccessServer()
+    caller = ros.create_node('header_only_success_caller')
+    executor = MultiThreadedExecutor()
+    executor.add_node(server)
+    executor.add_node(caller)
+    thread = threading.Thread(target=executor.spin, daemon=True)
+    thread.start()
+    try:
+        speech = dispatcher(caller, tier='audio_file')
+        assert speech.speak('Hi') is True
+    finally:
+        executor.shutdown()
+        caller.destroy_node()
+        server.destroy_node()
+        thread.join(timeout=5.0)
+
+
 def test_it_reports_failure_when_the_audio_service_is_absent(ros):
     """No robot at all, audio_file tier: speak() must return False, not hang or raise."""
     from rclpy.executors import MultiThreadedExecutor

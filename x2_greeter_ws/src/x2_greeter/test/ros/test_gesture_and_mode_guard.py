@@ -130,8 +130,53 @@ def test_it_accepts_a_motion_that_is_already_running(ros):
         thread.join(timeout=5.0)
 
 
+@pytest.mark.parametrize('state_name', ['SUCCESS', 'PENDING', 'CREATED'])
+def test_it_accepts_every_documented_acceptance_state(ros, state_name):
+    """_ACCEPTED_STATES lists SUCCESS, PENDING and CREATED besides RUNNING
+    (which has its own test above); pin all three so the whole accepted set
+    is exercised, not just the one FakeRobot happens to return.
+    """
+    from rclpy.executors import MultiThreadedExecutor
+    from rclpy.node import Node
+
+    from aimdk_msgs.msg import CommonState
+    from aimdk_msgs.srv import SetMcPresetMotion
+    from x2_greeter.ros.gesture import PRESET_MOTION_SERVICE
+
+    state_value = getattr(CommonState, state_name)
+
+    class AcceptedStateServer(Node):
+        def __init__(self):
+            super().__init__(f'accepted_state_{state_name.lower()}_server')
+            self.create_service(SetMcPresetMotion, PRESET_MOTION_SERVICE,
+                                self._on_preset_motion)
+
+        def _on_preset_motion(self, request, response):
+            response.response.header.code = 0
+            response.response.state.value = state_value
+            response.response.task_id = 42
+            return response
+
+    server = AcceptedStateServer()
+    caller = ros.create_node(f'accepted_state_{state_name.lower()}_caller')
+    executor = MultiThreadedExecutor()
+    executor.add_node(server)
+    executor.add_node(caller)
+    thread = threading.Thread(target=executor.spin, daemon=True)
+    thread.start()
+    try:
+        assert gesture_dispatcher(caller).perform(1002, 2) is True
+    finally:
+        executor.shutdown()
+        caller.destroy_node()
+        server.destroy_node()
+        thread.join(timeout=5.0)
+
+
 def test_it_rejects_a_motion_the_robot_refuses(ros):
-    """A non-zero code with a state other than RUNNING is a genuine rejection."""
+    """A state outside _ACCEPTED_STATES is a genuine rejection, regardless of
+    header.code -- state is what decides, not the header.
+    """
     from rclpy.executors import MultiThreadedExecutor
     from rclpy.node import Node
 
@@ -205,6 +250,49 @@ def test_it_rejects_when_the_header_is_clean_but_state_reports_failure(ros):
     thread.start()
     try:
         assert gesture_dispatcher(caller).perform(1002, 2) is False
+    finally:
+        executor.shutdown()
+        caller.destroy_node()
+        server.destroy_node()
+        thread.join(timeout=5.0)
+
+
+def test_it_accepts_when_only_the_header_reports_it(ros):
+    """A controller that fills only the header is still understood as accepted.
+
+    state.value is left at its default (UNKNOWN, 0) and header.code is left
+    at its default (0) -- the mirror image of
+    test_it_rejects_when_the_header_is_clean_but_state_reports_failure. A
+    controller that speaks only through the header, and cleanly, is the best
+    signal available from it, and must not be misread as a rejection.
+    """
+    from rclpy.executors import MultiThreadedExecutor
+    from rclpy.node import Node
+
+    from aimdk_msgs.srv import SetMcPresetMotion
+    from x2_greeter.ros.gesture import PRESET_MOTION_SERVICE
+
+    class HeaderOnlyAcceptedServer(Node):
+        def __init__(self):
+            super().__init__('header_only_accepted_motion_server')
+            self.create_service(SetMcPresetMotion, PRESET_MOTION_SERVICE,
+                                self._on_preset_motion)
+
+        def _on_preset_motion(self, request, response):
+            # response.response.state.value left at its default (UNKNOWN);
+            # response.response.header.code left at its default (0).
+            response.response.task_id = 21
+            return response
+
+    server = HeaderOnlyAcceptedServer()
+    caller = ros.create_node('header_only_accepted_motion_caller')
+    executor = MultiThreadedExecutor()
+    executor.add_node(server)
+    executor.add_node(caller)
+    thread = threading.Thread(target=executor.spin, daemon=True)
+    thread.start()
+    try:
+        assert gesture_dispatcher(caller).perform(1002, 2) is True
     finally:
         executor.shutdown()
         caller.destroy_node()
