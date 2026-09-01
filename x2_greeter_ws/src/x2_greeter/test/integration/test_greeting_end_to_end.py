@@ -30,7 +30,7 @@ def ros():
     rclpy.shutdown()
 
 
-def build_rig(ros, robot_kwargs=None, extra_params=()):
+def build_rig(ros, robot_kwargs=None, extra_params=(), before_spin=None):
     from rclpy.executors import MultiThreadedExecutor
     from rclpy.parameter import Parameter
 
@@ -47,6 +47,15 @@ def build_rig(ros, robot_kwargs=None, extra_params=()):
 
     node.detector = ScriptedDetector(
         [RawDetection(bbox=BBox(270, 90, 370, 390), confidence=0.9)])
+
+    # Any failure injection or collaborator swap must happen here, before the
+    # executor starts spinning: once a thread is spinning the node, a frame
+    # can reach the real detector/policy/mode_guard before the caller gets a
+    # chance to replace it, which is exactly the kind of race that must be
+    # impossible rather than merely improbable (e.g. reaching a real cloud
+    # backend from a test).
+    if before_spin is not None:
+        before_spin(node)
 
     executor = MultiThreadedExecutor()
     executor.add_node(robot)
@@ -194,18 +203,20 @@ def test_a_crashed_greeting_still_lets_the_next_person_be_greeted(ros):
     from x2_greeter.core.presence import PresenceState
     from x2_greeter.core.types import BBox, RawDetection
 
-    robot, node, executor, thread = build_rig(ros)
-
     calls = []
-    original_allowed = node.mode_guard.gesturing_allowed
 
-    def boom_once():
-        calls.append(1)
-        if len(calls) == 1:
-            raise RuntimeError('injected gesture-path failure')
-        return original_allowed()
+    def inject(node):
+        original_allowed = node.mode_guard.gesturing_allowed
 
-    node.mode_guard.gesturing_allowed = boom_once
+        def boom_once():
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError('injected gesture-path failure')
+            return original_allowed()
+
+        node.mode_guard.gesturing_allowed = boom_once
+
+    robot, node, executor, thread = build_rig(ros, before_spin=inject)
     try:
         assert wait_until(lambda: bool(calls)), 'the gesture path was never reached'
         assert node.wait_for_idle_worker(10.0), 'the greeting worker never finished'
@@ -229,19 +240,20 @@ def test_a_crashed_greeting_still_lets_the_next_person_be_greeted(ros):
 def test_the_robot_still_speaks_when_the_mode_service_never_answers(ros):
     """Test B1: ModeGuard refuses when it cannot reach the service at all.
 
-    'Not knowing is not knowing it is safe' — an unreachable GetMcAction
+    'Not knowing is not knowing it is safe' -- an unreachable GetMcAction
     service must not stop the greeting from being spoken.
     """
     from aimdk_msgs.srv import GetMcAction
 
-    robot, node, executor, thread = build_rig(ros)
-    try:
+    def inject(node):
         # Point the mode guard's client at a service nobody serves, so every
         # call_with_retry attempt is dropped and gesturing_allowed() refuses.
         node.mode_guard._client = node.create_client(
             GetMcAction, '/aimdk_5Fmsgs/srv/GetMcAction_does_not_exist',
             callback_group=node._callback_group)
 
+    robot, node, executor, thread = build_rig(ros, before_spin=inject)
+    try:
         assert wait_until(lambda: bool(robot.tts_requests)), 'the robot never spoke'
         assert node.wait_for_idle_worker(10.0)
         assert robot.motion_requests == []
@@ -284,28 +296,34 @@ def test_a_slow_detector_does_not_corrupt_the_greeting(ros):
     moves perception to its own MutuallyExclusiveCallbackGroup.
 
     A continuously-present person must still get exactly one greeting, and
-    speech must still succeed — i.e. the slow perception loop must not starve
-    the executor of the threads that deliver service responses.
-    """
-    robot, node, executor, thread = build_rig(ros)
+    speech must still succeed -- i.e. the slow perception loop must not
+    starve the executor of the threads that deliver service responses.
 
+    The swap to SlowDetector happens in before_spin, before the executor
+    starts spinning, so the very first frame is already measured -- otherwise
+    an early, un-slowed frame could be missed by max_concurrent entirely.
+    """
     lock = threading.Lock()
     state = {'concurrent': 0, 'max_concurrent': 0}
-    inner = node.detector
 
-    class SlowDetector:
-        def detect(self, bgr):
-            with lock:
-                state['concurrent'] += 1
-                state['max_concurrent'] = max(state['max_concurrent'], state['concurrent'])
-            try:
-                time.sleep(0.4)   # well over the fake robot's 0.1 s frame period
-                return inner.detect(bgr)
-            finally:
+    def inject(node):
+        inner = node.detector
+
+        class SlowDetector:
+            def detect(self, bgr):
                 with lock:
-                    state['concurrent'] -= 1
+                    state['concurrent'] += 1
+                    state['max_concurrent'] = max(state['max_concurrent'], state['concurrent'])
+                try:
+                    time.sleep(0.4)   # well over the fake robot's 0.1 s frame period
+                    return inner.detect(bgr)
+                finally:
+                    with lock:
+                        state['concurrent'] -= 1
 
-    node.detector = SlowDetector()
+        node.detector = SlowDetector()
+
+    robot, node, executor, thread = build_rig(ros, before_spin=inject)
     try:
         assert wait_until(lambda: bool(robot.tts_requests)), 'the robot never spoke'
         assert node.wait_for_idle_worker(15.0)
@@ -319,16 +337,18 @@ def test_a_slow_detector_does_not_corrupt_the_greeting(ros):
 
 def test_the_canned_backend_never_receives_a_frame(ros):
     """Test D (canned half): _needs_frame is the only switch to the network."""
-    robot, node, executor, thread = build_rig(ros)
-
     received = []
-    original_compose = node.policy.compose
 
-    def spying_compose(frame, ctx):
-        received.append(frame)
-        return original_compose(frame, ctx)
+    def inject(node):
+        original_compose = node.policy.compose
 
-    node.policy.compose = spying_compose
+        def spying_compose(frame, ctx):
+            received.append(frame)
+            return original_compose(frame, ctx)
+
+        node.policy.compose = spying_compose
+
+    robot, node, executor, thread = build_rig(ros, before_spin=inject)
     try:
         assert wait_until(lambda: bool(robot.tts_requests))
         assert node.wait_for_idle_worker(10.0)
@@ -342,30 +362,32 @@ def test_the_claude_backend_receives_a_non_empty_jpeg_frame(ros, monkeypatch):
     """Test D (claude half): the cloud provider is the only one shown a frame.
 
     A dummy key is set only so _build_backends takes the claude branch and
-    constructs a real ClaudeBackend; node.policy is replaced with a stub
-    before any frame arrives, so no network call is ever made.
+    constructs a real ClaudeBackend. node.policy is replaced with a stub in
+    before_spin -- strictly before the executor thread starts and any frame
+    can be processed -- so it is structurally impossible for a frame to
+    reach the real ClaudeBackend and make a real network call.
     """
     monkeypatch.setenv('ANTHROPIC_API_KEY', 'sk-ant-dummy-not-a-real-key')
 
     from x2_greeter.core.types import JpegFrame, Verdict
 
-    robot, node, executor, thread = build_rig(
-        ros, extra_params=[('backend.provider', 'claude')])
-    try:
+    received = []
+
+    class StubPolicy:
+        def compose(self, frame, ctx):
+            received.append(frame)
+            return Verdict(person_present=True, facing_robot=False, confidence=1.0,
+                           greeting='Hello there, from the stub.', reason='stub',
+                           source='claude', gesture=None)
+
+    def inject(node):
         assert node._primary_name == 'claude', \
             'test setup did not actually select the claude backend'
-
-        received = []
-
-        class StubPolicy:
-            def compose(self, frame, ctx):
-                received.append(frame)
-                return Verdict(person_present=True, facing_robot=False, confidence=1.0,
-                               greeting='Hello there, from the stub.', reason='stub',
-                               source='claude', gesture=None)
-
         node.policy = StubPolicy()
 
+    robot, node, executor, thread = build_rig(
+        ros, extra_params=[('backend.provider', 'claude')], before_spin=inject)
+    try:
         assert wait_until(lambda: bool(robot.tts_requests))
         assert node.wait_for_idle_worker(10.0)
         assert received, 'the backend was never asked'
