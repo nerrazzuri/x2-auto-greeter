@@ -1,0 +1,12 @@
+# Greeting phrases used by CannedBackend and recorded by
+# tools/make_greeting_audio.py as greeting_00.wav .. greeting_NN.wav.
+#
+# ORDER IS LOAD-BEARING. Appending is safe. Reordering or deleting a line
+# invalidates the WAVs already deployed to PC3.
+phrases:
+  - 'Hello there! Nice to see you.'
+  - 'Hi! Welcome. I am X2.'
+  - 'Good to see you. How are you doing?'
+  - 'Hey! Thanks for stopping by.'
+  - 'Hello! I am X2, pleased to meet you.'
+  - 'Hi there! Great to have you here.'
