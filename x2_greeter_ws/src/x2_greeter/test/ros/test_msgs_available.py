@@ -62,7 +62,7 @@ def test_preset_motion_request_takes_a_motion_and_an_area():
     motion = McPresetMotion()
     motion.value = 1002          # wave
     area = McControlArea()
-    area.value = 2               # right arm
+    area.value = 2               # right hand
     req.motion = motion
     req.area = area
     req.interrupt = False
