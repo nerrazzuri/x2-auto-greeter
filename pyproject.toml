@@ -1,0 +1,7 @@
+[tool.pytest.ini_options]
+testpaths = ["x2_greeter_ws/src/x2_greeter/test"]
+pythonpath = ["x2_greeter_ws/src/x2_greeter"]
+markers = [
+    "ros: requires rclpy and aimdk_msgs; runs only in the Docker harness",
+]
+addopts = "-m 'not ros'"
