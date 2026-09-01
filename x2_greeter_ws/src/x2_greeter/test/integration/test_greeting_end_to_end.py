@@ -506,6 +506,86 @@ def test_it_speaks_but_does_not_gesture_at_someone_within_arms_reach(ros):
         teardown_rig(robot, node, executor, thread)
 
 
+def test_gesture_refused_when_the_person_closes_distance_during_composition(ros):
+    """The interlock must compare against the freshest distance reading, not
+    the one captured back when the tracker entered CONFIRMING.
+
+    ctx.distance_m is captured once, up to the full policy.compose budget
+    before the interlock runs; at walking pace someone can cross the 1.0 m
+    floor inside that window. The old ctx.distance_m-only check cannot see
+    that -- this test starts the person outside 1.0 m (so CONFIRMING begins
+    with a safe ctx.distance_m), then moves them inside 1.0 m while
+    policy.compose is still running, and requires the robot to still speak
+    but never gesture.
+
+    detect.distance_min_m is lowered so the closer position keeps passing the
+    detection gate and _on_frame keeps refreshing _latest_reading -- the
+    point is a genuinely fresh close reading, not a stale one (that is the
+    next test).
+    """
+    entered = []
+
+    def inject(node):
+        original_compose = node.policy.compose
+
+        def slow_compose(frame, ctx):
+            entered.append(1)
+            time.sleep(1.2)
+            return original_compose(frame, ctx)
+
+        node.policy.compose = slow_compose
+
+    robot, node, executor, thread = build_rig(
+        ros, robot_kwargs={'distance_mm': 1400},
+        extra_params=[('detect.distance_min_m', 0.3)],
+        before_spin=inject)
+    try:
+        assert wait_until(lambda: bool(entered)), 'policy.compose was never entered'
+        # The person walks closer while compose is still running; the depth
+        # image is mutated directly (rather than reconstructing FakeRobot)
+        # so every subsequent published frame reports the closer distance.
+        robot._depth[:] = 600
+        assert wait_until(lambda: bool(robot.tts_requests)), 'the robot never spoke'
+        assert node.wait_for_idle_worker(10.0)
+        assert robot.motion_requests == []
+    finally:
+        teardown_rig(robot, node, executor, thread)
+
+
+def test_gesture_refused_when_the_distance_reading_goes_stale(ros):
+    """Fail safe: if no fresh reading arrives before the interlock runs, that
+    is not knowing that it is safe to gesture, same as ModeGuard's refusal
+    when the mode service is unreachable.
+
+    Frames stop confirming a live detection the moment policy.compose starts
+    (the scripted detector is cleared), so _latest_reading is never refreshed
+    again; by the time compose returns, its age exceeds loss_grace_s and the
+    interlock must refuse on staleness alone, without ever seeing a close
+    reading.
+    """
+    entered = []
+
+    def inject(node):
+        original_compose = node.policy.compose
+
+        def slow_compose(frame, ctx):
+            entered.append(1)
+            node.detector.set_detections([])
+            time.sleep(1.2)
+            return original_compose(frame, ctx)
+
+        node.policy.compose = slow_compose
+
+    robot, node, executor, thread = build_rig(ros, before_spin=inject)
+    try:
+        assert wait_until(lambda: bool(entered)), 'policy.compose was never entered'
+        assert wait_until(lambda: bool(robot.tts_requests)), 'the robot never spoke'
+        assert node.wait_for_idle_worker(10.0)
+        assert robot.motion_requests == []
+    finally:
+        teardown_rig(robot, node, executor, thread)
+
+
 def test_a_crash_before_the_verdict_still_recovers_and_greets_again(ros):
     """A crash inside policy.compose -- before on_verdict is ever reached --
     is a route Test A does not cover: _greet's crash-recovery `finally` only

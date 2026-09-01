@@ -12,6 +12,13 @@ from x2_greeter.ros.service_call import call_with_retry
 
 PRESET_MOTION_SERVICE = '/aimdk_5Fmsgs/srv/SetMcPresetMotion'
 
+# CommonTaskResponse.state values that mean the request was taken for
+# execution. PENDING/CREATED/RUNNING are all still "accepted" from perform()'s
+# point of view -- the caller only needs to know the robot took the request,
+# not that it has finished.
+_ACCEPTED_STATES = (CommonState.SUCCESS, CommonState.PENDING, CommonState.CREATED,
+                    CommonState.RUNNING)
+
 
 class GestureDispatcher:
     def __init__(self, node, callback_group=None) -> None:
@@ -43,18 +50,32 @@ class GestureDispatcher:
             self._node.get_logger().error('SetMcPresetMotion did not respond')
             return False
 
-        if response.response.header.code == 0:
+        # CommonTaskResponse carries the real answer in `state`, not
+        # `header.code` -- header.code defaults to zero, so a controller that
+        # refuses the motion only through state (and never touches the
+        # header) would otherwise read to us as accepted. state is the field
+        # this response exists to carry, so it is checked first, not as a
+        # fallback. The one exception is a controller that only fills the
+        # header: UNKNOWN state with a clean header is the best signal we can
+        # get from it, so that counts as accepted too.
+        state_value = response.response.state.value
+        if state_value in _ACCEPTED_STATES:
+            if state_value == CommonState.RUNNING:
+                self._node.get_logger().info(
+                    f'gesture {motion_id} on area {area_id} running '
+                    f'(task {response.response.task_id})')
+            else:
+                self._node.get_logger().info(
+                    f'gesture {motion_id} on area {area_id} accepted '
+                    f'(task {response.response.task_id})')
+            return True
+        if state_value == CommonState.UNKNOWN and response.response.header.code == 0:
             self._node.get_logger().info(
                 f'gesture {motion_id} on area {area_id} accepted '
                 f'(task {response.response.task_id})')
             return True
-        if response.response.state.value == CommonState.RUNNING:
-            self._node.get_logger().info(
-                f'gesture {motion_id} on area {area_id} running '
-                f'(task {response.response.task_id})')
-            return True
 
         self._node.get_logger().error(
-            f'gesture {motion_id} on area {area_id} rejected '
+            f'gesture {motion_id} on area {area_id} rejected: state={state_value} '
             f'(task {response.response.task_id})')
         return False

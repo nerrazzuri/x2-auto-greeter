@@ -50,8 +50,11 @@ python3 -m pytest src/x2_greeter/test -m ros -v -p no:cacheprovider -p no:launch
 # test_audio_tooling.py needs no ROS, but it locates tools/make_greeting_audio.py
 # by climbing four parents from its own file path, which only lands on the
 # repo root when the test runs from its original tree (REPO, bind-mounted),
-# not from the copy synced into WS above. Run it separately, from REPO, so
-# that path resolution — and the pyproject.toml pythonpath it relies on to
+# not from the copy synced into WS above. test_shipped_config.py needs no ROS
+# either, and while its own path resolution does not care which tree it runs
+# from, running the whole non-ROS set from REPO keeps both files consistent
+# with the host and needs no growing file list. Run it separately, from REPO,
+# so that path resolution — and the pyproject.toml pythonpath it relies on to
 # import x2_greeter — both work the same way they do on the host.
-echo "== pytest (non-ROS audio tooling, from $REPO)"
-(cd "$REPO" && python3 -m pytest x2_greeter_ws/src/x2_greeter/test/test_audio_tooling.py -v -p no:cacheprovider -p no:launch_testing -p no:launch_ros)
+echo "== pytest (non-ROS, from $REPO)"
+(cd "$REPO" && python3 -m pytest x2_greeter_ws/src/x2_greeter/test -m "not ros" -v -p no:cacheprovider -p no:launch_testing -p no:launch_ros)

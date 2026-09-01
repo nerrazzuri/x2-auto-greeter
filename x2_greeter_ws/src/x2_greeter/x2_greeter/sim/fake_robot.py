@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import numpy as np
 import rclpy
-from aimdk_msgs.msg import McAction
+from aimdk_msgs.msg import CommonState, McAction
 from aimdk_msgs.srv import GetMcAction, PlayAudioFile, PlayTts, SetMcPresetMotion
 from cv_bridge import CvBridge
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -100,15 +100,22 @@ class FakeRobot(Node):
         self.audio_requests.append(request)
         self.get_logger().info(
             f'audio file: {request.file.file_path}/{request.file.file_name}')
-        # The vendor .srv spells the response field 'reponse' (sic).
+        # The vendor .srv spells the response field 'reponse' (sic). The real
+        # answer lives in `status`, per CommonResponse -- a header-only
+        # response (header.code == 0, status left at UNKNOWN) is also treated
+        # as success by the dispatcher, but the fake reports the way the
+        # service is documented to: status.value == SUCCESS.
         response.reponse.header.code = 0
+        response.reponse.status.value = CommonState.SUCCESS
         return response
 
     def _on_preset_motion(self, request, response):
         self.motion_requests.append(request)
         self.get_logger().info(
             f'preset motion {request.motion.value} on area {request.area.value}')
+        # CommonTaskResponse's real answer lives in `state`, not header.code.
         response.response.header.code = 0
+        response.response.state.value = CommonState.SUCCESS
         response.response.task_id = len(self.motion_requests)
         return response
 

@@ -103,7 +103,8 @@ def test_the_audio_request_matches_the_documented_format(rig):
     assert speech.speak('ignored, a recording is played instead') is True
     audio = robot.audio_requests[0].file
     assert audio.pkg_name == 'x2_greeter'
-    assert audio.file_path == '/var/tmp/x2_greeter_audio'
+    # Trailing separator always present, matching the vendor's own client.
+    assert audio.file_path == '/var/tmp/x2_greeter_audio/'
     assert audio.file_name.startswith('greeting_')
     assert audio.file_name.endswith('.wav')
     assert audio.info.channels == 1
@@ -169,10 +170,16 @@ def test_it_reports_failure_when_the_audio_file_is_rejected(ros):
     Audio files are the last fallback tier, so this pins the rejection branch
     with a test-local service node rather than FakeRobot (which always
     succeeds and must stay untouched for tasks 14/15).
+
+    Rejection is expressed the way the vendor's own client reads success --
+    through `status`, not `header.code` (play_audio.py checks
+    `resp.reponse.status.value == 1`). Field is misspelled 'reponse' (sic) in
+    the real .srv, not 'response'.
     """
     from rclpy.executors import MultiThreadedExecutor
     from rclpy.node import Node
 
+    from aimdk_msgs.msg import CommonState
     from aimdk_msgs.srv import PlayAudioFile
     from x2_greeter.ros.speech import AUDIO_SERVICE
 
@@ -182,13 +189,54 @@ def test_it_reports_failure_when_the_audio_file_is_rejected(ros):
             self.create_service(PlayAudioFile, AUDIO_SERVICE, self._on_play_audio_file)
 
         def _on_play_audio_file(self, request, response):
-            # Non-zero code: the vendor's documented failure signal. Field is
-            # misspelled 'reponse' (sic) in the real .srv, no 'response'.
             response.reponse.header.code = 1
+            response.reponse.status.value = CommonState.INVALID
             return response
 
     server = RejectingAudioServer()
     caller = ros.create_node('rejecting_caller')
+    executor = MultiThreadedExecutor()
+    executor.add_node(server)
+    executor.add_node(caller)
+    thread = threading.Thread(target=executor.spin, daemon=True)
+    thread.start()
+    try:
+        speech = dispatcher(caller, tier='audio_file')
+        assert speech.speak('Hi') is False
+    finally:
+        executor.shutdown()
+        caller.destroy_node()
+        server.destroy_node()
+        thread.join(timeout=5.0)
+
+
+def test_it_reports_failure_when_the_header_is_clean_but_status_reports_failure(ros):
+    """The exact case the header-only success check gets wrong.
+
+    header.code is default-zero, so a server that reports failure only
+    through `status` and never touches the header must still be read as a
+    failure -- not as success because the header happens to be clean.
+    """
+    from rclpy.executors import MultiThreadedExecutor
+    from rclpy.node import Node
+
+    from aimdk_msgs.msg import CommonState
+    from aimdk_msgs.srv import PlayAudioFile
+    from x2_greeter.ros.speech import AUDIO_SERVICE
+
+    class HeaderCleanFailureServer(Node):
+        def __init__(self):
+            super().__init__('header_clean_failure_audio_server')
+            self.create_service(PlayAudioFile, AUDIO_SERVICE, self._on_play_audio_file)
+
+        def _on_play_audio_file(self, request, response):
+            # header.code left at its default 0 ("success" if you only look
+            # at the header); status reports the real, failing answer.
+            response.reponse.status.value = CommonState.FAILURE
+            return response
+
+    server = HeaderCleanFailureServer()
+    caller = ros.create_node('header_clean_failure_caller')
     executor = MultiThreadedExecutor()
     executor.add_node(server)
     executor.add_node(caller)

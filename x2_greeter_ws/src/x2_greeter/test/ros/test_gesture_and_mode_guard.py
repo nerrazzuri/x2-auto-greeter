@@ -87,11 +87,13 @@ def test_it_reports_failure_when_the_service_is_absent(ros):
 
 
 def test_it_accepts_a_motion_that_is_already_running(ros):
-    """A non-zero code alongside state RUNNING still counts as accepted.
+    """state == RUNNING counts as accepted, regardless of header.code.
 
-    FakeRobot always returns code == 0, so this branch needs its own
-    test-local responder (the same pattern as RejectingAudioServer in
-    test_speech.py) rather than modifying FakeRobot, which Task 15 depends on.
+    CommonTaskResponse's real answer lives in `state`, not `header.code`, so
+    this pins state as the field that is actually checked. FakeRobot always
+    reports SUCCESS, so this branch needs its own test-local responder (the
+    same pattern as RejectingAudioServer in test_speech.py) rather than
+    modifying FakeRobot, which Task 15 depends on.
     """
     from rclpy.executors import MultiThreadedExecutor
     from rclpy.node import Node
@@ -151,6 +153,51 @@ def test_it_rejects_a_motion_the_robot_refuses(ros):
 
     server = RejectingMotionServer()
     caller = ros.create_node('rejecting_motion_caller')
+    executor = MultiThreadedExecutor()
+    executor.add_node(server)
+    executor.add_node(caller)
+    thread = threading.Thread(target=executor.spin, daemon=True)
+    thread.start()
+    try:
+        assert gesture_dispatcher(caller).perform(1002, 2) is False
+    finally:
+        executor.shutdown()
+        caller.destroy_node()
+        server.destroy_node()
+        thread.join(timeout=5.0)
+
+
+def test_it_rejects_when_the_header_is_clean_but_state_reports_failure(ros):
+    """The exact case the header-first check gets wrong.
+
+    header.code is default-zero, so a controller that refuses the motion only
+    through `state` and never touches the header must still be read as a
+    rejection -- not as accepted because the header happens to be clean. This
+    is the message's own shape inviting the bug: `state` is the field
+    CommonTaskResponse exists to carry.
+    """
+    from rclpy.executors import MultiThreadedExecutor
+    from rclpy.node import Node
+
+    from aimdk_msgs.msg import CommonState
+    from aimdk_msgs.srv import SetMcPresetMotion
+    from x2_greeter.ros.gesture import PRESET_MOTION_SERVICE
+
+    class HeaderCleanFailureServer(Node):
+        def __init__(self):
+            super().__init__('header_clean_failure_motion_server')
+            self.create_service(SetMcPresetMotion, PRESET_MOTION_SERVICE,
+                                self._on_preset_motion)
+
+        def _on_preset_motion(self, request, response):
+            # header.code left at its default 0; state carries the real,
+            # refusing answer.
+            response.response.state.value = CommonState.FAILURE
+            response.response.task_id = 13
+            return response
+
+    server = HeaderCleanFailureServer()
+    caller = ros.create_node('header_clean_failure_motion_caller')
     executor = MultiThreadedExecutor()
     executor.add_node(server)
     executor.add_node(caller)

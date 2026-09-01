@@ -55,6 +55,13 @@ class GreetingNode(Node):
         self._perception_group = MutuallyExclusiveCallbackGroup()
         self._tracker_lock = threading.Lock()
         self._greetings_dispatched = 0
+        # (timestamp, distance_m) of the freshest gated detection seen by
+        # _on_frame, or None before the first one arrives. ctx.distance_m is
+        # captured once, when the tracker enters CONFIRMING; by the time the
+        # interlock in _greet runs, up to the full cloud budget may have
+        # passed, so the interlock reads this instead. Guarded by
+        # _tracker_lock, same as the tracker itself.
+        self._latest_reading = None
 
         self._gate_config = GateConfig(
             confidence_min=self._param('detect.confidence_min'),
@@ -64,9 +71,14 @@ class GreetingNode(Node):
         )
         self._depth_scale = float(self._param('camera.depth_scale'))
 
+        # Also the bound for how old a distance reading may be at the gesture
+        # interlock: not knowing where the person is right now is not knowing
+        # that it is safe to gesture, same reasoning as ModeGuard's refusal
+        # when the mode service is unreachable.
+        self._loss_grace_s = float(self._param('presence.loss_grace_s'))
         self.tracker = PresenceTracker(PresenceConfig(
             dwell_s=self._param('presence.dwell_s'),
-            loss_grace_s=self._param('presence.loss_grace_s'),
+            loss_grace_s=self._loss_grace_s,
             clear_s=self._param('presence.clear_s'),
             cooldown_s=self._param('presence.cooldown_s'),
             reject_cooldown_s=self._param('presence.reject_cooldown_s'),
@@ -234,8 +246,11 @@ class GreetingNode(Node):
         detection = gate_detections(raws, bgr.shape[:2], depth,
                                     self._depth_scale, self._gate_config)
 
+        now = self._now()
         with self._tracker_lock:
-            to_confirm = self.tracker.update(self._now(), detection)
+            if detection is not None:
+                self._latest_reading = (now, detection.distance_m)
+            to_confirm = self.tracker.update(now, detection)
         if to_confirm is None:
             return
 
@@ -284,13 +299,27 @@ class GreetingNode(Node):
         try:
             choice = self.selector.select(verdict.gesture)
             allowed = self.mode_guard.gesturing_allowed()
-            if allowed and ctx.distance_m < GESTURE_MIN_DISTANCE_M:
+            if allowed:
                 # This is the interlock itself, not belt and braces: it is a
                 # fixed safety floor, deliberately independent of the tunable
-                # detect.distance_min_m gate.
-                self.get_logger().warning(
-                    f'person at {ctx.distance_m:.2f} m is too close to gesture')
-                allowed = False
+                # detect.distance_min_m gate. ctx.distance_m was captured when
+                # the tracker entered CONFIRMING, up to the full cloud budget
+                # ago -- at walking pace someone can cross the floor in that
+                # window, so this reads the freshest distance instead.
+                now = self._now()
+                with self._tracker_lock:
+                    reading = self._latest_reading
+                if reading is None or (now - reading[0]) > self._loss_grace_s:
+                    age = f'{now - reading[0]:.2f}' if reading is not None else 'unknown'
+                    self.get_logger().warning(
+                        f'distance reading is {age}s old (bound {self._loss_grace_s:.2f}s); '
+                        'not gesturing -- not knowing where the person is is not '
+                        'knowing that it is safe')
+                    allowed = False
+                elif reading[1] < GESTURE_MIN_DISTANCE_M:
+                    self.get_logger().warning(
+                        f'person at {reading[1]:.2f} m is too close to gesture')
+                    allowed = False
 
             self.get_logger().info(
                 f'greeting ({verdict.source}): {verdict.greeting!r} + {choice.name}')

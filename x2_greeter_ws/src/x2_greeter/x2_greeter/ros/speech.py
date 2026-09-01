@@ -12,6 +12,7 @@ import os
 import random
 from typing import Optional
 
+from aimdk_msgs.msg import CommonState
 from aimdk_msgs.srv import PlayAudioFile, PlayTts
 
 from x2_greeter.ros.service_call import call_with_retry
@@ -115,7 +116,11 @@ class SpeechDispatcher:
         request = PlayAudioFile.Request()
         request.file.pkg_name = 'x2_greeter'
         request.file.file_name = file_name
-        request.file.file_path = self._audio_dir
+        # Trailing separator always present, matching the vendor's own client
+        # (play_audio.py: os.path.dirname(media_path) + '/'). Without it, a
+        # server that concatenates path and name directly looks for
+        # '<audio_dir><file_name>' instead of '<audio_dir>/<file_name>'.
+        request.file.file_path = os.path.join(self._audio_dir, '')
         request.file.priority = self._priority_level
         request.file.priority_weight = 0
         request.file.info.channels = AUDIO_CHANNELS
@@ -137,9 +142,25 @@ class SpeechDispatcher:
         common = getattr(response, 'reponse', None)
         if common is None:
             common = getattr(response, 'response', None)
-        if common is None or common.header.code != 0:
+        if common is None:
             self._log_audio_error(
                 f'PlayAudioFile rejected {os.path.join(self._audio_dir, file_name)}; '
+                'is the file deployed to PC3 and world-readable?')
+            return False
+
+        # CommonResponse carries the real answer in `status` (a CommonState),
+        # not `header.code` -- header.code defaults to zero, so a server that
+        # reports failure only through status (and never touches the header)
+        # would otherwise read to us as success. The one exception is a server
+        # that only fills the header: UNKNOWN status with a clean header is
+        # the best signal we can get from it, so that counts as success too.
+        status_value = common.status.value
+        accepted = (status_value == CommonState.SUCCESS
+                   or (status_value == CommonState.UNKNOWN and common.header.code == 0))
+        if not accepted:
+            self._log_audio_error(
+                f'PlayAudioFile rejected {os.path.join(self._audio_dir, file_name)} '
+                f'(status={status_value}, header.code={common.header.code}); '
                 'is the file deployed to PC3 and world-readable?')
             return False
         return True
