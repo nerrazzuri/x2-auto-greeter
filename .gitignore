@@ -27,3 +27,4 @@ assets/audio/*.pcm
 
 # Secrets
 .env
+.superpowers/
