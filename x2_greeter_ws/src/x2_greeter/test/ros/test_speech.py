@@ -161,3 +161,62 @@ def test_it_reports_failure_when_the_service_is_absent(ros):
         executor.shutdown()
         caller.destroy_node()
         thread.join(timeout=5.0)
+
+
+def test_it_reports_failure_when_the_audio_file_is_rejected(ros):
+    """A responder that rejects every PlayAudioFile call: speak() must return False.
+
+    Audio files are the last fallback tier, so this pins the rejection branch
+    with a test-local service node rather than FakeRobot (which always
+    succeeds and must stay untouched for tasks 14/15).
+    """
+    from rclpy.executors import MultiThreadedExecutor
+    from rclpy.node import Node
+
+    from aimdk_msgs.srv import PlayAudioFile
+    from x2_greeter.ros.speech import AUDIO_SERVICE
+
+    class RejectingAudioServer(Node):
+        def __init__(self):
+            super().__init__('rejecting_audio_server')
+            self.create_service(PlayAudioFile, AUDIO_SERVICE, self._on_play_audio_file)
+
+        def _on_play_audio_file(self, request, response):
+            # Non-zero code: the vendor's documented failure signal. Field is
+            # misspelled 'reponse' (sic) in the real .srv, no 'response'.
+            response.reponse.header.code = 1
+            return response
+
+    server = RejectingAudioServer()
+    caller = ros.create_node('rejecting_caller')
+    executor = MultiThreadedExecutor()
+    executor.add_node(server)
+    executor.add_node(caller)
+    thread = threading.Thread(target=executor.spin, daemon=True)
+    thread.start()
+    try:
+        speech = dispatcher(caller, tier='audio_file')
+        assert speech.speak('Hi') is False
+    finally:
+        executor.shutdown()
+        caller.destroy_node()
+        server.destroy_node()
+        thread.join(timeout=5.0)
+
+
+def test_it_reports_failure_when_the_audio_service_is_absent(ros):
+    """No robot at all, audio_file tier: speak() must return False, not hang or raise."""
+    from rclpy.executors import MultiThreadedExecutor
+
+    caller = ros.create_node('lonely_audio_caller')
+    executor = MultiThreadedExecutor()
+    executor.add_node(caller)
+    thread = threading.Thread(target=executor.spin, daemon=True)
+    thread.start()
+    try:
+        speech = dispatcher(caller, tier='audio_file')
+        assert speech.speak('anyone there?') is False
+    finally:
+        executor.shutdown()
+        caller.destroy_node()
+        thread.join(timeout=5.0)
