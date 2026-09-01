@@ -7,13 +7,14 @@ unreadable depth reading rejects the detection.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Protocol, Sequence
+from typing import List, Optional, Protocol, Sequence, runtime_checkable
 
 import numpy as np
 
 from x2_greeter.core.types import BBox, Detection, RawDetection
 
 
+@runtime_checkable
 class PersonDetector(Protocol):
     """Anything that can find people in a BGR frame."""
 
