@@ -148,8 +148,8 @@ Pure, clock-injected, no I/O — the most heavily unit-tested component.
 | `IDLE` | a gated detection appears | `CANDIDATE` |
 | `CANDIDATE` | dwell `>= 1.0 s` | `CONFIRMING` |
 | `CANDIDATE` | no detection for `0.5 s` | `IDLE` |
-| `CONFIRMING` | verdict: person present **and** facing | `GREETING` |
-| `CONFIRMING` | verdict: not a person / not facing | `COOLDOWN(5 s)` |
+| `CONFIRMING` | verdict: person present | `GREETING` |
+| `CONFIRMING` | verdict: not a person | `COOLDOWN(5 s)` |
 | `CONFIRMING` | backend error or timeout, **and** local detector still sees a person | `GREETING` (canned) |
 | `GREETING` | speech + gesture dispatched | `COOLDOWN(30 s)` |
 | `COOLDOWN` | elapsed `>= cooldown` **and** frame person-free for `>= 3 s` | `IDLE` |
@@ -169,7 +169,7 @@ away, come back, get greeted again.
 **One call per greeting event, never per frame.** A naive per-frame cloud detector at
 2 fps would cost roughly $50/hour of idle standing and add 1–2 s of latency to every
 frame. Instead the local detector decides *when* to ask, and a single call answers both
-"is this really a person facing me?" and "what should I say and do?".
+"is this really a person?" and "what should I say and do?".
 
 - Frame downscaled to 512 px on the longest edge, JPEG-encoded, base64.
 - Model `claude-opus-5`, effort `low`, adaptive thinking left on. (Disabling thinking
@@ -186,6 +186,12 @@ frame. Instead the local detector decides *when* to ask, and a single call answe
   "reason":         "string"
 }
 ```
+
+`facing_robot` is **advisory, never a gate.** A person with their back turned still gets
+greeted; the field only lets the backend adapt its wording and gesture choice (a bow or a
+salute aimed at someone's back is odd; a spoken hello is not). Because greeting does not
+depend on orientation, the cloud and offline paths behave identically here — the local
+detector's inability to judge orientation costs nothing.
 
 - Hard client timeout: **2.5 s**. Exceeded means fallback, not a stall.
 - Error handling chains most-specific-first (`NotFoundError` → `RateLimitError` →
@@ -336,11 +342,9 @@ All ROS 2 parameters, with defaults:
 | Depth frame missing or invalid | detection rejected |
 | Camera topic silent > 5 s | WARN heartbeat; no crash |
 
-**Known behavioural difference in fallback mode:** judging *"facing the robot"* is the
-cloud tier's job. A cheap local detector knows a person is present but not which way they
-are oriented. Offline, the robot greets on "present, in range, centred" without the facing
-check — it will occasionally greet someone's back. Accepted; the alternative is not
-greeting at all when the network is down.
+The cloud and offline paths trigger on the same condition — a person present, in range,
+centred. Orientation never gates a greeting (§8.1), so losing the cloud costs only the
+quality of the wording and the aptness of the gesture, never the behaviour itself.
 
 ## 15. Testing
 
@@ -378,14 +382,14 @@ These cannot be answered from the documentation, and are recorded rather than gu
 
 1. Does `PlayTts` synthesise onboard, or does it require internet? Determines whether
    tier 3 is ever needed.
-2. Does PC2 have outbound internet access for the Anthropic API? **Cloud-primary
-   operation depends entirely on this.** If not, tiers 2/3 become the primary path — the
-   design still works, but degraded.
-3. `depth_image` encoding (`16UC1` millimetres vs `32FC1` metres) and its resolution
+2. `depth_image` encoding (`16UC1` millimetres vs `32FC1` metres) and its resolution
    relative to `rgb_image`.
-4. `rgb_image` encoding (`rgb8` / `bgr8`), resolution, and frame rate.
-5. Does `PlayAudioFile` require `RequestAudioFocus` first?
-6. Does PC2 have GPU/NPU acceleration usable by `cv2.dnn`, or is CPU inference at camera
+3. `rgb_image` encoding (`rgb8` / `bgr8`), resolution, and frame rate.
+4. Does `PlayAudioFile` require `RequestAudioFocus` first?
+5. Does PC2 have GPU/NPU acceleration usable by `cv2.dnn`, or is CPU inference at camera
    rate sufficient?
-7. Preset motion duration, and whether motions can be issued back-to-back — needed to keep
+6. Preset motion duration, and whether motions can be issued back-to-back — needed to keep
    gesture and speech from desynchronising.
+
+**Resolved:** PC2 has outbound internet by default — the robot's internet connection is
+via PC2. Cloud-primary operation is sound.
