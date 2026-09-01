@@ -1,0 +1,29 @@
+# Vendor SDK — redistributed archive, not our source
+sdk/
+*.zip
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# colcon
+build/
+install/
+log/
+
+# Model weights (fetched, not committed)
+models/*.caffemodel
+models/*.onnx
+models/*.weights
+
+# Generated audio assets
+assets/audio/*.wav
+assets/audio/*.pcm
+
+# Secrets
+.env
