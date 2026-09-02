@@ -4,6 +4,10 @@
 "strictly prohibited to avoid safety risks". The greeter runs on **PC2**
 (10.0.1.41); its audio assets live on **PC3** (10.0.1.42).
 
+If you are an agent doing this for the first time, read
+[`AGENT_BRINGUP_GUIDE.md`](AGENT_BRINGUP_GUIDE.md) first — it covers what this
+runbook assumes: the architecture, the untested assumptions, and the known gaps.
+
 ## 1. Prerequisites on PC2
 
 ```bash
