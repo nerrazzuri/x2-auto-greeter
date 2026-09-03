@@ -12,7 +12,7 @@ message and never the buffer.
 """
 from __future__ import annotations
 
-from typing import NamedTuple, Optional, Protocol, Sequence
+from typing import NamedTuple, Optional, Protocol
 
 import numpy as np
 

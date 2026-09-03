@@ -8,7 +8,7 @@ Later tasks add fakes for the remaining ports to this file.
 """
 from __future__ import annotations
 
-from typing import List, Optional, Sequence
+from typing import List, Sequence
 
 from x2_greeter.cognition.transcriber import TranscriptionUnavailable, Utterance
 
