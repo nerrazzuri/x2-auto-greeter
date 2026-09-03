@@ -27,6 +27,7 @@ setup(
         'console_scripts': [
             'greeting_node = x2_greeter.ros.greeting_node:main',
             'fake_robot = x2_greeter.sim.fake_robot:main',
+            'x2_conversation = x2_greeter.ros.conversation_node:main',
         ],
     },
 )
