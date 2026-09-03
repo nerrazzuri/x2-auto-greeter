@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from typing import Optional, Sequence, Tuple
 
 from x2_greeter.core.detection import median_depth_m
-from x2_greeter.core.types import BBox, RawDetection
+from x2_greeter.core.types import RawDetection
 
 _CHILD_BANDS = frozenset({'child', 'toddler', 'infant'})
 
@@ -129,7 +129,8 @@ def child_mode(local_child: bool, model_age_band: Optional[str]) -> bool:
     return band in _CHILD_BANDS
 
 
-def observe(raws, rgb_shape, depth, depth_scale: float, config: SceneConfig,
+def observe(raws: Sequence[RawDetection], rgb_shape, depth,
+            depth_scale: float, config: SceneConfig,
             at_s: float) -> SceneSnapshot:
     """Turn raw detections plus a depth frame into a scene snapshot.
 
