@@ -366,3 +366,98 @@ def test_the_guard_never_changes_the_mode(rig):
     robot.current_action = McAction.JOINT_DEFAULT
     mode_guard(caller).gesturing_allowed()
     assert robot.current_action == McAction.JOINT_DEFAULT
+
+
+# ------------------------- the controller that names the mode but not its id
+
+def test_an_unset_action_id_with_a_stand_default_description_is_accepted(rig):
+    """Found on hardware: the X2 controller answers GetMcAction with
+    current_action.value == 0 and action_desc == 'STAND_DEFAULT'. Zero is not
+    a mode -- McAction's enum starts at 1 -- so it means "not populated", and
+    the description is the only signal there is. Reading only the id made the
+    guard refuse forever on a robot that was, in fact, standing.
+    """
+    from aimdk_msgs.msg import McActionStatus
+
+    robot, caller = rig
+    robot.current_action = 0
+    robot.action_desc = 'STAND_DEFAULT'
+    robot.action_status = McActionStatus.RUNNING
+
+    assert mode_guard(caller).gesturing_allowed() is True
+
+
+def test_an_unset_action_id_with_any_other_description_is_refused(rig):
+    from aimdk_msgs.msg import McActionStatus
+
+    robot, caller = rig
+    robot.current_action = 0
+    robot.action_desc = 'DAMPING_DEFAULT'
+    robot.action_status = McActionStatus.RUNNING
+
+    assert mode_guard(caller).gesturing_allowed() is False
+
+
+def test_an_unset_action_id_with_no_description_at_all_is_refused(rig):
+    # Nothing said is not the same as "standing".
+    from aimdk_msgs.msg import McActionStatus
+
+    robot, caller = rig
+    robot.current_action = 0
+    robot.action_desc = ''
+    robot.action_status = McActionStatus.RUNNING
+
+    assert mode_guard(caller).gesturing_allowed() is False
+
+
+def test_a_real_non_stand_id_wins_over_a_stand_default_description(rig):
+    """The description is a fallback for an unset id, never an override. A
+    controller reporting a genuine non-stand mode must still be believed even
+    if the description disagrees -- otherwise a stale string could talk the
+    interlock out of a refusal.
+    """
+    from aimdk_msgs.msg import McAction, McActionStatus
+
+    robot, caller = rig
+    robot.current_action = McAction.DAMPING_DEFAULT
+    robot.action_desc = 'STAND_DEFAULT'
+    robot.action_status = McActionStatus.RUNNING
+
+    assert mode_guard(caller).gesturing_allowed() is False
+
+
+# ------------------------------------------------- a mode still being changed
+
+def test_a_transitioning_mode_is_refused_even_when_the_id_says_stand_default(rig):
+    # Mid-switch the controller is moving the robot between stances; swinging
+    # an arm into that is exactly what the interlock exists to prevent.
+    from aimdk_msgs.msg import McAction, McActionStatus
+
+    robot, caller = rig
+    robot.current_action = McAction.STAND_DEFAULT
+    robot.action_status = McActionStatus.TRANSITION
+
+    assert mode_guard(caller).gesturing_allowed() is False
+
+
+def test_a_transitioning_mode_is_refused_on_the_description_path_too(rig):
+    from aimdk_msgs.msg import McActionStatus
+
+    robot, caller = rig
+    robot.current_action = 0
+    robot.action_desc = 'STAND_DEFAULT'
+    robot.action_status = McActionStatus.TRANSITION
+
+    assert mode_guard(caller).gesturing_allowed() is False
+
+
+def test_an_idle_status_does_not_by_itself_refuse(rig):
+    # IDLE is McActionStatus's own zero value, so an unset status must not be
+    # read as a refusal -- only an explicit TRANSITION is.
+    from aimdk_msgs.msg import McAction, McActionStatus
+
+    robot, caller = rig
+    robot.current_action = McAction.STAND_DEFAULT
+    robot.action_status = McActionStatus.IDLE
+
+    assert mode_guard(caller).gesturing_allowed() is True

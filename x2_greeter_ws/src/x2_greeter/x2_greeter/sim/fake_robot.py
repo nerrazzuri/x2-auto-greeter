@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import numpy as np
 import rclpy
-from aimdk_msgs.msg import CommonState, McAction
+from aimdk_msgs.msg import CommonState, McAction, McActionStatus
 from aimdk_msgs.srv import GetMcAction, PlayAudioFile, PlayTts, SetMcPresetMotion
 from cv_bridge import CvBridge
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -26,6 +26,8 @@ class FakeRobot(Node):
                  depth_topic: str = DEFAULT_DEPTH_TOPIC,
                  publish_camera: bool = True,
                  current_action: int = McAction.STAND_DEFAULT,
+                 action_desc: str = 'fake',
+                 action_status: int = McActionStatus.RUNNING,
                  tts_succeeds: bool = True,
                  distance_mm: int = 2000,
                  width: int = 640, height: int = 480,
@@ -37,6 +39,11 @@ class FakeRobot(Node):
         self.motion_requests = []
         self.mode_queries = 0
         self.current_action = current_action
+        # The real X2 controller leaves current_action.value at its
+        # default zero and names the mode only here, so the fake has to
+        # be able to do the same.
+        self.action_desc = action_desc
+        self.action_status = action_status
         self.tts_succeeds = tts_succeeds
 
         group = ReentrantCallbackGroup()
@@ -123,7 +130,8 @@ class FakeRobot(Node):
         self.mode_queries += 1
         response.header.code = 0
         response.info.current_action.value = int(self.current_action)
-        response.info.action_desc = 'fake'
+        response.info.action_desc = self.action_desc
+        response.info.status.value = int(self.action_status)
         return response
 
 
