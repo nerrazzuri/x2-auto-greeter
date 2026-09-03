@@ -365,15 +365,39 @@ Time was spent on both of these before hardware settled them:
   The greeter registers anyway, best-effort, because the docs say unknown
   sources are discarded — but it is not what stands between you and a wave.
 
+### Solved during the session: do not ship a one-gesture config
+
+Gestures refused in strict alternation — accept, reject, accept, reject — with
+`state=FAILURE` back in ~9 ms (a refusal, not a timeout) while the mode read
+`STAND_DEFAULT`/`RUNNING` throughout. It looked like arbitration.
+
+It was the gesture list. `GestureSelector._random_name` deliberately avoids
+repeating its previous choice:
+
+```python
+pool = [name for name in self._enabled if name != self._last]
+if not pool:
+    pool = list(self._enabled)
+```
+
+With `gestures.enabled: [wave]` the pool is empty every time, so the fallback
+sends the same motion id on every greeting — and the controller refuses a
+preset motion repeated back to back. Widening the list to the full eleven made
+the refusals stop completely, because the selector then never repeats.
+
+So: **a single-entry `gestures.enabled` refuses roughly every other gesture.**
+The trim-the-list advice for a first live run is still good, but trim to a
+handful of arm-only motions, not to one.
+
+Established: the alternation, the selector's behaviour, and that it stopped
+when the list widened. Inferred, not isolated by experiment: that the
+controller's rule is specifically "no identical preset motion twice in a row".
+If you need that precisely, ask for the same motion twice deliberately and
+watch — do not reach for `interrupt=True` in `gesture.py`, which would paper
+over a refusal that is telling you something true.
+
 ### Still unexplained
 
-- **Gestures alternate accept/reject.** Across one session: accept, reject,
-  accept, reject, in strict alternation, with `state=FAILURE` returned in ~9 ms
-  — a refusal, not a timeout — while the mode read `STAND_DEFAULT`/`RUNNING`
-  throughout. The most likely story is the arm ending a wave away from neutral
-  and the controller refusing to repeat from there, which would make it a
-  pose-reset problem rather than an arbitration one. Not diagnosed. Do not
-  "fix" it by setting `interrupt=True` in `gesture.py` before you know.
 - **`aimdk_msgs` ships in several versions on one robot** (0.8.24 under
   `/agibot/software/common` and on PC1's `mc`; 1.2.2 bundled with
   `orbbec_camera`). Matching PC1's version is what matters; that it is even a
