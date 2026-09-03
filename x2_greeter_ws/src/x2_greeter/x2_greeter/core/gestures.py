@@ -45,26 +45,33 @@ def _spec(name: str, motion_id: int, areas: tuple, handed: bool) -> GestureSpec:
 
 
 CATALOGUE = {
+    # Every motion_id here is a member of the vendor's McPresetMotion enum.
+    # test_catalogue_ids_are_real_vendor_motions pins that against the SDK's
+    # own message, because three of these were once invented from a
+    # description and the controller silently refused them.
     # --- enabled by default: greetings ---
     'wave': _spec('wave', 1002, (AREA_RIGHT, AREA_LEFT), True),
     'salute': _spec('salute', 1013, (AREA_RIGHT, AREA_LEFT), True),
     'handshake': _spec('handshake', 1003, (AREA_RIGHT, AREA_LEFT), True),
     'raise_hand': _spec('raise_hand', 1001, (AREA_RIGHT, AREA_LEFT), True),
-    'raise_both': _spec('raise_both', 1010, (AREA_BOTH,), False),
+    # RAISE_HAND with both hands in the area mask -- the areas are bit flags,
+    # so there is no separate "raise both" motion and 1010 was never one.
+    'raise_both': _spec('raise_both', 1001, (AREA_BOTH,), False),
     'bow': _spec('bow', 3001, (AREA_WHOLE_BODY,), False),
     'high_five': _spec('high_five', 1008, (AREA_RIGHT, AREA_LEFT), True),
-    'wave_chest': _spec('wave_chest', 1011, (AREA_RIGHT, AREA_LEFT), True),
+    'wave_chest': _spec('wave_chest', 3010, (AREA_WHOLE_BODY,), False),
     'cheer': _spec('cheer', 3011, (AREA_WHOLE_BODY,), False),
     'blow_kiss': _spec('blow_kiss', 1004, (AREA_RIGHT, AREA_LEFT), True),
-    'heart': _spec('heart', 1007, (AREA_BOTH, AREA_RIGHT, AREA_LEFT), True),
+    'heart': _spec('heart', 3004, (AREA_WHOLE_BODY,), False),
     # --- available but disabled by default (spec section 9) ---
     'hug': _spec('hug', 3008, (AREA_WHOLE_BODY,), False),
-    'wave_goodbye': _spec('wave_goodbye', 3031, (AREA_WHOLE_BODY,), False),
-    'clap': _spec('clap', 3017, (AREA_WHOLE_BODY,), False),
+    'clap': _spec('clap', 3015, (AREA_WHOLE_BODY,), False),
     'cross_arms': _spec('cross_arms', 3009, (AREA_WHOLE_BODY,), False),
-    'scratch_head': _spec('scratch_head', 3024, (AREA_WHOLE_BODY,), False),
-    'grab_buttocks': _spec('grab_buttocks', 3025, (AREA_WHOLE_BODY,), False),
     'dynamic_light_wave': _spec('dynamic_light_wave', 3007, (AREA_WHOLE_BODY,), False),
+    'like': _spec('like', 3002, (AREA_WHOLE_BODY,), False),
+    'peace': _spec('peace', 3003, (AREA_WHOLE_BODY,), False),
+    'fist_bump': _spec('fist_bump', 1009, (AREA_RIGHT, AREA_LEFT), True),
+    'turn_wave': _spec('turn_wave', 2001, (AREA_WHOLE_BODY,), False),
 }
 
 DEFAULT_ENABLED = (

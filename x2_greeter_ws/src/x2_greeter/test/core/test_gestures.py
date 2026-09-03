@@ -18,8 +18,8 @@ EXPECTED_ENABLED = {
     'high_five', 'wave_chest', 'cheer', 'blow_kiss', 'heart',
 }
 EXPECTED_DISABLED = {
-    'hug', 'wave_goodbye', 'clap', 'cross_arms', 'scratch_head',
-    'grab_buttocks', 'dynamic_light_wave',
+    'hug', 'clap', 'cross_arms', 'dynamic_light_wave',
+    'like', 'peace', 'fist_bump', 'turn_wave',
 }
 
 
@@ -34,10 +34,11 @@ def test_catalogue_also_carries_the_disabled_gestures():
 
 @pytest.mark.parametrize(('name', 'motion_id'), [
     ('wave', 1002), ('salute', 1013), ('handshake', 1003), ('raise_hand', 1001),
-    ('raise_both', 1010), ('bow', 3001), ('high_five', 1008), ('wave_chest', 1011),
-    ('cheer', 3011), ('blow_kiss', 1004), ('heart', 1007),
-    ('hug', 3008), ('wave_goodbye', 3031), ('clap', 3017), ('cross_arms', 3009),
-    ('scratch_head', 3024), ('grab_buttocks', 3025), ('dynamic_light_wave', 3007),
+    ('raise_both', 1001), ('bow', 3001), ('high_five', 1008), ('wave_chest', 3010),
+    ('cheer', 3011), ('blow_kiss', 1004), ('heart', 3004),
+    ('hug', 3008), ('clap', 3015), ('cross_arms', 3009),
+    ('dynamic_light_wave', 3007), ('like', 3002), ('peace', 3003),
+    ('fist_bump', 1009), ('turn_wave', 2001),
 ])
 def test_motion_ids_match_the_interface_docs(name, motion_id):
     assert CATALOGUE[name].motion_id == motion_id
@@ -62,12 +63,15 @@ def test_both_arm_gesture_ignores_the_hand_preference():
     assert resolve_area(CATALOGUE['raise_both'], 'left', rng) == AREA_BOTH
 
 
-def test_heart_supports_both_hands_and_either_single_hand():
+def test_heart_is_a_whole_body_interaction_motion():
+    # 3004 is the vendor's INTERACTION_SWEATHEART, "heart above the head" --
+    # both arms, so the hand preference has nothing to choose between. It was
+    # previously catalogued as 1007 with per-hand areas; 1007 is not a member
+    # of McPresetMotion at all, and the controller refused every one.
     heart = CATALOGUE['heart']
     rng = random.Random(0)
-    assert resolve_area(heart, 'both', rng) == AREA_BOTH
-    assert resolve_area(heart, 'left', rng) == AREA_LEFT
-    assert resolve_area(heart, 'right', rng) == AREA_RIGHT
+    for preference in ('both', 'left', 'right'):
+        assert resolve_area(heart, preference, rng) == AREA_WHOLE_BODY
 
 
 def test_both_preference_on_a_single_arm_gesture_falls_back_to_the_first_area():
