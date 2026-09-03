@@ -68,7 +68,22 @@ def test_every_generated_file_is_playable_and_conformant(tmp_path, tool):
 
 
 def test_the_file_count_matches_the_speech_default(tool):
+    import pathlib
+
+    import yaml
+
     from x2_greeter.cognition.canned import DEFAULT_PHRASES
-    # config/greeter.yaml sets speech.audio_file_count to this length; a
-    # mismatch would make the dispatcher ask for a recording that is not there.
-    assert len(DEFAULT_PHRASES) == 6
+
+    # make_greeting_audio.py writes one greeting_NN.wav per phrase, and
+    # SpeechDispatcher picks an index below speech.audio_file_count. Asserting
+    # the relationship rather than a hard-coded number is the point: a literal
+    # here goes red whenever the phrase list is edited, which teaches people to
+    # update the literal instead of the config it is supposed to be guarding.
+    config = pathlib.Path(__file__).resolve().parents[1] / 'config' / 'greeter.yaml'
+    with open(config, 'r') as handle:
+        params = yaml.safe_load(handle)['/**']['ros__parameters']
+
+    assert params['speech']['audio_file_count'] == len(DEFAULT_PHRASES), (
+        'speech.audio_file_count must equal the number of phrases: the '
+        'dispatcher would otherwise ask for a recording that was never '
+        'generated, and a missing file produces no error anywhere')

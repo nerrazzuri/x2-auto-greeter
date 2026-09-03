@@ -15,12 +15,26 @@ from x2_greeter.core.types import JpegFrame, SceneContext, Verdict
 # Order is load-bearing: tools/make_greeting_audio.py records phrase N as
 # greeting_{N:02d}.wav. Append freely; never reorder or delete.
 DEFAULT_PHRASES = (
-    'Hello there! Nice to see you.',
-    'Hi! Welcome. I am X2.',
-    'Good to see you. How are you doing?',
-    'Hey! Thanks for stopping by.',
-    'Hello! I am X2, pleased to meet you.',
-    'Hi there! Great to have you here.',
+    'Hello there! I was beginning to think nobody would walk past today.',
+    'Well, hello! You are easily the most interesting thing I have seen all morning.',
+    'Hi there! I am X2. I stand here, I look friendly, and occasionally I wave.',
+    'Oh, hello! You have caught me practising my very best posture.',
+    'Hello! I have been standing here doing nothing important at all. You are a welcome interruption.',
+    'Hi! I am X2. I am a robot, which I admit is something of a giveaway.',
+    'Hello there! No need to worry, I am friendly. Mostly I say hello and wave.',
+    'Well, hello! I was told to greet people today, and you have made my job very easy.',
+    'Hi there! I should warn you, I am much better at waving than at small talk.',
+    'Hello! You are officially the highlight of my afternoon so far.',
+    'Oh, hi! I did not hear you coming, though to be fair my ears are not my strong point.',
+    'Hello there! I am X2, and greeting people is genuinely the best part of my day.',
+    'Hi! I would offer you a handshake, but I am still working on my grip.',
+    'Hello! I have waited here so patiently that I think I have earned a small round of applause.',
+    'Well, hello there! I hope your day is going well. Mine is going very stationary.',
+    'Hi there! I am X2. I do not walk about much, but I wave with real enthusiasm.',
+    'Hello! It is good to see somebody. It gets rather quiet out here between visitors.',
+    'Oh, hello! Do not mind me. I am being enormously helpful by standing perfectly still.',
+    'Hi there! I was built to say hello, so allow me to do it properly. Hello!',
+    'Hello! Excellent timing on your part. I was about to start talking to myself.',
 )
 
 

@@ -70,7 +70,7 @@
       priority_level: 6
       # Audio assets live on PC3 (10.0.1.42), world-readable.
       audio_dir: /var/tmp/x2_greeter_audio
-      audio_file_count: 6
+      audio_file_count: 20
       phrases_file: ''
 
     gestures:
