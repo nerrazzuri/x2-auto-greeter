@@ -456,18 +456,29 @@ class ConversationNode(Node):
         """head.gaze_follow: point the head at the person being addressed.
 
         Gated on head.enabled AND head.gaze_follow (both ship false, so this
-        is inert by default -- see config/conversation.yaml). Addressing
-        *mode* is fixed for the session (cognition.conversation.Conversation
-        locks it once at start()), but the geometry tracks the live,
-        per-frame subject so a "follow" feature actually follows: INDIVIDUAL
-        centres the currently-detected subject's bounding box; GROUP uses a
-        slow sinusoidal drift instead of staring at one face. Never passes a
-        custom max_yaw_rad -- core.gaze.MAX_YAW_RAD (15 degrees) is the only
-        clamp used here.
+        is inert by default -- see config/conversation.yaml) AND the session
+        being active (R21): Conversation.mode is set once at start() but is
+        NOT cleared by close()/_commit_close() -- it only resets once the
+        full cooldown_s has elapsed (Fix round 2's Finding 1) -- so without
+        this check the head would keep tracking a person for the whole
+        cooldown window after _after_close() has already centred it once.
+        mode and the active check are read together under self._lock (R22)
+        rather than as two separate unlocked reads, so a session cannot
+        close between them.
+
+        Addressing *mode* is fixed for the session (locked once at start()),
+        but the geometry tracks the live, per-frame subject so a "follow"
+        feature actually follows: INDIVIDUAL centres the currently-detected
+        subject's bounding box; GROUP uses a slow sinusoidal drift instead
+        of staring at one face. Never passes a custom max_yaw_rad --
+        core.gaze.MAX_YAW_RAD (15 degrees) is the only clamp used here.
         """
         if not (self._p('head.enabled') and self._p('head.gaze_follow')):
             return
-        mode = self.conversation.mode
+        with self._lock:
+            if not self.conversation.active:
+                return
+            mode = self.conversation.mode
         if mode is AddressingMode.INDIVIDUAL:
             subject = snapshot.subject
             if subject is None or subject.bbox is None:

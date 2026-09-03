@@ -526,6 +526,51 @@ def test_gaze_follow_commands_nothing_when_gaze_follow_disabled():
     node.destroy_node()
 
 
+def test_gaze_follow_stops_after_the_session_closes():
+    """R21: Conversation.mode is set at start() but is NOT cleared by
+    close()/_commit_close() -- it only resets once the full cooldown_s has
+    elapsed (Fix round 2's Finding 1). Without gating _update_gaze on
+    Conversation.active as well, a still-visible person would keep being
+    tracked for the whole cooldown window, un-centring the head that
+    _after_close() had just centred once.
+    """
+    log = _Recorder()
+    node = _conversation_node_class()(
+        face=_FakeFace(log), speech=_FakeSpeech(log),
+        gestures=_FakeGestures(log), head=_FakeHead(log),
+        transcriber=_FakeTranscriber(log), backend=_FakeBackend(log),
+        audio_source=None, frame_source=None, env_camera=None,
+        agent_mode=_FakeAgentMode(), safety_gate=_FakeModeGuard(),
+        start_worker=False,
+        overrides={'head.enabled': True, 'head.gaze_follow': True})
+    node.log = log
+    subject = _off_centre_person()
+    snapshot = SceneSnapshot(people=(subject,), subject=subject,
+                             mode=AddressingMode.INDIVIDUAL, at_s=0.0)
+
+    node._on_scene(_scene(subject), at_s=0.0)        # locks mode to INDIVIDUAL
+    node._greeting_finished(at_s=0.5)
+    node._update_gaze(snapshot, image_width=640, at_s=1.0)
+    assert node.head.yaws, 'expected the head to be tracking during the session'
+
+    silence_timeout_s = node.get_parameter('conversation.silence_timeout_s').value
+    close_at = 0.5 + silence_timeout_s + 1.0
+    node._on_tick(at_s=close_at)
+    assert node.conversation.state is SessionState.COOLDOWN
+    assert 'head.centre' in node.log.names()
+
+    yaws_at_close = len(node.head.yaws)
+    # The person is still standing there (same snapshot); further frames
+    # must not resume tracking for the rest of the cooldown window.
+    node._update_gaze(snapshot, image_width=640, at_s=close_at + 1.0)
+    node._update_gaze(snapshot, image_width=640, at_s=close_at + 2.0)
+    assert len(node.head.yaws) == yaws_at_close, (
+        'gaze-follow must stop once the session closes -- _after_close() '
+        'only centres the head once, and a further look_at() on the next '
+        'frame would silently un-centre it for the whole cooldown window')
+    node.destroy_node()
+
+
 def test_face_gets_a_non_default_spin_until():
     from x2_greeter.ros.conversation_node import _face_spin_until
     from x2_greeter.ros.face import _default_spin
