@@ -55,7 +55,13 @@
       provider: claude
       model: claude-opus-5
       effort: low
-      timeout_s: 2.5
+      # Measured on an X2 against claude-opus-5 at effort low with a 512 px
+      # JPEG: 3.1 s, 3.4 s, 6.0 s (median 3.4 s). The 2.5 s this shipped with
+      # was a guess made without hardware, and it is unreachable -- every call
+      # timed out and fell back to a canned phrase, which looks like a working
+      # system with a dull vocabulary rather than a broken one. Must stay below
+      # presence.confirm_timeout_s; test_shipped_config.py enforces that.
+      timeout_s: 8.0
 
     speech:
       # auto | tts | audio_file
