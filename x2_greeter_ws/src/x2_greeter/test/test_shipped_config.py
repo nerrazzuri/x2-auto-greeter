@@ -260,3 +260,56 @@ def test_base_frame_rgb_topic_is_the_confirmed_wide_stereo_candidate():
         'this is the candidate wide front-stereo topic from the SDK sensor '
         'docs; confirm it on site with `ros2 topic list` before flipping '
         'base_frame.use_env_camera on')
+
+
+# --- the launch file must not quietly overrule the file above -------------
+#
+# ROS 2 applies a Node's `parameters` list left to right, so a dict listed
+# after the params file beats the file. conversation.launch.py used to pass
+# {'venue.profile': venue} with the launch argument defaulting to
+# 'clothing_store', so every launch layered clothing_store over whatever
+# venue.profile said -- making the key above, and HARDWARE_BRINGUP.md
+# section 8 which sends the operator to it, silently wrong.
+#
+# The behavioural test lives in test/ros/test_conversation_launch.py, which
+# imports `launch` and therefore only runs in the container. This one reads
+# the file as source so the invariant is also guarded on the host gate,
+# where the container suite is not run.
+
+LAUNCH_PATH = (Path(__file__).resolve().parents[1] / 'launch'
+               / 'conversation.launch.py')
+
+
+def _declared_launch_arguments():
+    import ast
+
+    tree = ast.parse(LAUNCH_PATH.read_text(encoding='utf-8'))
+    found = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = getattr(func, 'id', None) or getattr(func, 'attr', None)
+        if name != 'DeclareLaunchArgument' or not node.args:
+            continue
+        argument = node.args[0]
+        if not isinstance(argument, ast.Constant):
+            continue
+        default = None
+        for keyword in node.keywords:
+            if keyword.arg == 'default_value' and isinstance(keyword.value,
+                                                             ast.Constant):
+                default = keyword.value.value
+        found[argument.value] = default
+    return found
+
+
+def test_the_venue_launch_argument_defaults_to_empty():
+    arguments = _declared_launch_arguments()
+    assert 'venue' in arguments, LAUNCH_PATH
+    assert arguments['venue'] == '', (
+        "venue:= must default to empty so that config/conversation.yaml's "
+        'venue.profile is what the robot actually uses. Any non-empty '
+        'default is layered over the params file on every launch, and an '
+        'operator editing the YAML at the venue gets no effect and no '
+        'explanation')
