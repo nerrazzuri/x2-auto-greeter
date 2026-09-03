@@ -2,11 +2,16 @@
 
 Spec section 12. This test installs a tripwire over every filesystem-mutating
 entry point Python offers and drives the entire image path through it.
+
+Audio is under the same rule (spec section 12, extended to hearing): the
+tests below scan the package source itself for the write calls, log calls
+and transcript-persistence calls that would leak a PCM buffer to disk.
 """
 import builtins
 import io
 import os
 import pathlib
+import re
 
 import numpy as np
 import pytest
@@ -14,6 +19,40 @@ import pytest
 from x2_greeter.core.detection import GateConfig, gate_detections
 from x2_greeter.core.imaging import to_jpeg_frame
 from x2_greeter.core.types import BBox, RawDetection
+
+PACKAGE_ROOT = pathlib.Path(__file__).resolve().parents[1] / 'x2_greeter'
+
+AUDIO_WRITE_PATTERNS = (
+    r'\bwave\.open\b',
+    r'\bsoundfile\.write\b',
+    r'\bsf\.write\b',
+    r'\bscipy\.io\.wavfile\.write\b',
+    r'\.wav[\'"]',            # any literal .wav path
+    r'\bsd\.rec\b',
+)
+
+
+def _scan(root, patterns, exclude=()):
+    """Grep every .py file under root for any of the forbidden patterns.
+
+    A static source scan, not a runtime guard -- unlike the image tripwire
+    above it catches a forbidden call even on a code path a test never
+    happens to execute. Returns 'path:lineno: pattern' for every hit, empty
+    if none. `exclude` names files (relative to root, posix-style) to skip
+    -- for a known, reviewed reference that is not a write, such as a vendor
+    playback asset filename.
+    """
+    compiled = [re.compile(pattern) for pattern in patterns]
+    offenders = []
+    for path in sorted(pathlib.Path(root).rglob('*.py')):
+        if path.relative_to(root).as_posix() in exclude:
+            continue
+        lines = path.read_text(encoding='utf-8').splitlines()
+        for lineno, line in enumerate(lines, start=1):
+            for pattern in compiled:
+                if pattern.search(line):
+                    offenders.append(f'{path}:{lineno}: {pattern.pattern}')
+    return offenders
 
 
 class ScriptedDetector:
@@ -158,3 +197,43 @@ def test_the_tripwire_itself_catches_a_write(monkeypatch, tmp_path):
     except AssertionError as e:
         assert 'cv2.imwrite called in the image path' in str(e)
     assert any("cv2.imwrite" in v for v in violations), f"No cv2.imwrite violation recorded: {violations}"
+
+
+# -- audio: the same rule, enforced by scanning the source rather than by
+#    driving the (ROS-only) audio path through a runtime guard -----------
+
+def test_no_module_writes_audio_to_disk():
+    # ros/speech.py references pre-recorded greeting_NN.wav filenames when
+    # asking the vendor's own PlayAudioFile service to play them -- a
+    # read-only reference to a vendor asset name, not a write, and not the
+    # captured-microphone audio this rule is about.
+    offenders = _scan(PACKAGE_ROOT, AUDIO_WRITE_PATTERNS,
+                      exclude={'ros/speech.py'})
+    assert offenders == [], (
+        f'audio is under the same rule as images: {offenders}')
+
+
+def test_the_audio_scanner_catches_a_real_violation(tmp_path):
+    # The scanner is worthless unless it can be shown to fire. Plant one.
+    planted = tmp_path / 'leak.py'
+    planted.write_text("import wave\nwave.open('/tmp/utterance.wav', 'wb')\n")
+    assert _scan(tmp_path, AUDIO_WRITE_PATTERNS) != []
+
+
+def test_no_module_logs_raw_pcm():
+    # Formatting a bytes buffer into a log line is how audio escapes without
+    # anybody deciding to save it.
+    offenders = _scan(PACKAGE_ROOT, (
+        r'logger\(\)\.[a-z]+\([^)]*\bpcm\b',
+        r'logger\(\)\.[a-z]+\([^)]*audio_data',
+        r'logger\(\)\.[a-z]+\([^)]*\baudio\b[^)]*\{',
+    ))
+    assert offenders == [], f'raw audio must never reach a log line: {offenders}'
+
+
+def test_no_module_persists_a_transcript():
+    offenders = _scan(PACKAGE_ROOT, (
+        r'open\([^)]*transcript',
+        r'transcript[^\n]*\.write\(',
+    ))
+    assert offenders == [], f'transcripts are not written down: {offenders}'

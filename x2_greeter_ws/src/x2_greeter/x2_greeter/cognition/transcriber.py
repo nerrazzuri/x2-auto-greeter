@@ -88,3 +88,23 @@ class FasterWhisperTranscriber:
             language=normalise_language(getattr(info, 'language', None)),
             confidence=float(getattr(info, 'language_probability', 0.0) or 0.0),
         )
+
+
+class AudioSource(Protocol):
+    """Segmented speech, one utterance at a time.
+
+    The implementation shipping in this phase reads the vendor's already
+    segmented stream, which is what only_voice mode plus the vendor wake
+    word produces. A later phase subscribes to raw audio and runs its own
+    VAD, AEC and denoising behind this same port, and nothing above it
+    changes.
+
+    Implementations take their on_utterance(pcm: bytes, at_s: float)
+    callback at construction time.
+    """
+
+    def start(self) -> None:
+        ...
+
+    def stop(self) -> None:
+        ...
