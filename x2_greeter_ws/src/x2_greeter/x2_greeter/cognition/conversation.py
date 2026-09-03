@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass
-from typing import Optional, Sequence, Tuple
+from typing import Optional, Tuple
 
 from x2_greeter.cognition.dialogue import Exchange, Turn
 from x2_greeter.core.language import DEFAULT_LANGUAGE, LanguagePolicy
