@@ -568,52 +568,70 @@ class ConversationNode(Node):
         with self._lock:
             if self.conversation.state is not SessionState.LISTENING:
                 return
+        # The thinking expression is shown for the whole of the latency it
+        # exists to cover, and for no longer than that. A turn has five
+        # early exits (no transcriber, an empty utterance, a late
+        # transcription, a backend failure, a reply the model gave no emoji
+        # for) and every one of them used to leave the thinking face lit,
+        # which on hardware reads as the robot having frozen mid-thought.
+        # The finally below is the whole guarantee: this turn either
+        # replaces the thinking face with the reply's own expression, or
+        # clears it. face.enabled ships false, but HARDWARE_BRINGUP.md
+        # section 3 is where the operator turns it on.
         self.face.show_thinking()
+        expression_shown = False
         try:
-            utterance = self.transcriber.transcribe(pcm, SAMPLE_RATE_HZ)
-        except TranscriptionUnavailable:
-            self._say_fallback()
-            return
-        if utterance.is_empty:
-            return
-
-        with self._lock:
-            self.conversation.heard(utterance, at_s)
-            if self.conversation.state is not SessionState.THINKING:
+            try:
+                utterance = self.transcriber.transcribe(pcm, SAMPLE_RATE_HZ)
+            except TranscriptionUnavailable:
+                self._say_fallback()
                 return
-            history = self.conversation.history
-            language = self.conversation.language
-        scene = self._scene
+            if utterance.is_empty:
+                return
 
-        base_frame = _as_jpeg_frame(self._base_frame)
-        frame = _as_jpeg_frame(self._frame)
-        try:
-            turn = self.backend.respond(
-                base_frame=base_frame, frame=frame, scene=scene,
-                venue=self.venue, history=history, utterance=utterance,
-                language=language, child=self._child)
-        except BackendUnavailable:
             with self._lock:
-                fatal = self.conversation.backend_failed(self._now())
-            self._say_fallback()
-            if fatal:
+                self.conversation.heard(utterance, at_s)
+                if self.conversation.state is not SessionState.THINKING:
+                    return
+                history = self.conversation.history
+                language = self.conversation.language
+            scene = self._scene
+
+            base_frame = _as_jpeg_frame(self._base_frame)
+            frame = _as_jpeg_frame(self._frame)
+            try:
+                turn = self.backend.respond(
+                    base_frame=base_frame, frame=frame, scene=scene,
+                    venue=self.venue, history=history, utterance=utterance,
+                    language=language, child=self._child)
+            except BackendUnavailable:
+                with self._lock:
+                    fatal = self.conversation.backend_failed(self._now())
+                self._say_fallback()
+                if fatal:
+                    self._after_close()
+                    expression_shown = True     # _after_close already cleared
+                return
+
+            with self._lock:
+                self.conversation.replied(turn, self._now())
+
+            if turn.gesture:
+                self.gestures.play(turn.gesture)
+            if turn.emoji:
+                self.face.show(turn.emoji, MODE_ONCE)
+                expression_shown = True
+            self.speech.say(turn.reply, language=turn.language)
+
+            with self._lock:
+                self.conversation.finished_speaking(self._now())
+                closed = self.conversation.state is SessionState.COOLDOWN
+            if closed:
                 self._after_close()
-            return
-
-        with self._lock:
-            self.conversation.replied(turn, self._now())
-
-        if turn.gesture:
-            self.gestures.play(turn.gesture)
-        if turn.emoji:
-            self.face.show(turn.emoji, MODE_ONCE)
-        self.speech.say(turn.reply, language=turn.language)
-
-        with self._lock:
-            self.conversation.finished_speaking(self._now())
-            closed = self.conversation.state is SessionState.COOLDOWN
-        if closed:
-            self._after_close()
+                expression_shown = True         # _after_close already cleared
+        finally:
+            if not expression_shown:
+                self.face.clear()
 
     def _say_fallback(self) -> None:
         with self._lock:

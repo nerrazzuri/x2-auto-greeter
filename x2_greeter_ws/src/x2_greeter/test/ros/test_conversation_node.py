@@ -616,6 +616,7 @@ def test_after_close_centres_the_head():
 #
 # BLOCKING 1: _on_scene's PERSON_GONE close skipped _after_close(). BLOCKING 2
 # (the clock seam) is tested in test_frame_source.py, where the seam is.
+# Finding 6: the thinking face outlived its turn on every early return.
 
 
 def _empty_room(at_s=1.0):
@@ -690,3 +691,63 @@ def test_walking_away_does_not_propagate_when_after_close_raises(node):
     node.face.clear = _raise
     node._on_scene(_empty_room(1.0), at_s=1.0)      # must not raise
     assert node.conversation.state is SessionState.COOLDOWN
+
+
+class _DeadTranscriber:
+    name = 'dead'
+
+    def __init__(self, log):
+        self.log = log
+
+    def transcribe(self, pcm, sample_rate=16000):
+        from x2_greeter.cognition.transcriber import TranscriptionUnavailable
+        self.log.note('transcribe')
+        raise TranscriptionUnavailable('no transcriber configured')
+
+
+def test_the_thinking_face_does_not_outlive_a_failed_transcription(node):
+    """face.enabled ships false, but HARDWARE_BRINGUP.md section 3 turns it
+    on. A turn that ends early -- and TranscriptionUnavailable is the one
+    that fires for the whole session when faster-whisper failed to load --
+    must not leave the thinking expression on the screen: it reads as the
+    robot having frozen mid-thought while it is in fact talking.
+    """
+    node.transcriber = _DeadTranscriber(node.log)
+    node._on_scene(_scene(), at_s=0.0)
+    node._greeting_finished(at_s=0.5)
+    node.log.calls.clear()
+
+    _drive_turn(node)
+
+    names = node.log.names()
+    assert 'face.thinking' in names
+    assert names.index('face.clear') > names.index('face.thinking'), (
+        'every exit from a turn must leave the face in a defined state')
+    assert node.speech.said[-1][0] != '', 'the robot still says something'
+
+
+def test_the_thinking_face_does_not_outlive_a_reply_with_no_emoji(node):
+    node.backend.turn = Turn('Nice to meet you.', 'en', 'wave', None, False)
+    node._on_scene(_scene(), at_s=0.0)
+    node._greeting_finished(at_s=0.5)
+    node.log.calls.clear()
+
+    _drive_turn(node)
+
+    assert 'face.clear' in node.log.names()
+
+
+def test_a_replys_own_expression_is_not_cleared_out_from_under_it(node):
+    """The guard above must not turn into "clear the face after every
+    turn": the emoji the model chose stays up until the session closes."""
+    node._on_scene(_scene(), at_s=0.0)
+    node._greeting_finished(at_s=0.5)
+    node.log.calls.clear()
+
+    _drive_turn(node)
+
+    names = node.log.names()
+    assert 'face.show' in names
+    assert 'face.clear' not in names, (
+        'the reply expression is the defined state; clearing it immediately '
+        'would throw away the one visible thing the model chose')
