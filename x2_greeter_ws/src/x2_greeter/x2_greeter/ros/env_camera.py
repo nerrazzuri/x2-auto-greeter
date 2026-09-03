@@ -58,6 +58,26 @@ class EnvCamera:
                 f'base-frame handler failed: {type(exc).__name__}')
 
     def _decode(self, msg: Image) -> Optional[np.ndarray]:
+        """msg.data -> a BGR array, honouring msg.encoding.
+
+        core.imaging.to_jpeg_frame() -- where this image ends up, on its way
+        to the model -- assumes BGR, which is what the other producer
+        (frame_source.py) guarantees by asking CvBridge for
+        desired_encoding='bgr8'. This one reshapes the buffer itself, so it
+        has to do the same job by hand: an rgb8 camera handed straight
+        through would have the robot describe a blue shirt as orange. An
+        encoding this function cannot place is dropped rather than guessed
+        at, and the camera stays pending for the next frame -- a wrong
+        channel order is silent, a dropped frame says so in the log.
+        """
+        encoding = (msg.encoding or '').strip().lower()
+        # bgr8 is the expected case; 8UC3 and an empty encoding are raw
+        # three-channel buffers with no colour claim, taken as-is.
+        if encoding not in ('bgr8', 'rgb8', '8uc3', ''):
+            self._node.get_logger().warn(
+                f"dropping a frame in unsupported encoding '{msg.encoding}'; "
+                'the base frame must be 3-channel 8-bit (bgr8 or rgb8)')
+            return None
         expected = msg.height * msg.width * 3
         buffer = np.frombuffer(bytes(msg.data), dtype=np.uint8)
         if buffer.size != expected:
@@ -66,7 +86,12 @@ class EnvCamera:
                 f'dropping a {buffer.size}-byte frame that declares '
                 f'{msg.height}x{msg.width}x3')
             return None
-        return buffer.reshape((msg.height, msg.width, 3))
+        image = buffer.reshape((msg.height, msg.width, 3))
+        if encoding == 'rgb8':
+            # Reverse the channel axis only. ascontiguousarray because the
+            # slice is a view and cv2 reads the buffer directly.
+            image = np.ascontiguousarray(image[:, :, ::-1])
+        return image
 
     def _now(self) -> float:
         return self._node.get_clock().now().nanoseconds * 1e-9

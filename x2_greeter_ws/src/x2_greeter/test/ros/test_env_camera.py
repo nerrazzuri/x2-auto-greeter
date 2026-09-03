@@ -126,3 +126,56 @@ def test_a_malformed_frame_is_dropped_without_taking_the_node_down():
     node.callback(bad)
     assert got == []
     assert camera.pending is True, 'still waiting for a usable frame'
+
+
+# ------------------------------------------------------- channel order (SHOULD FIX 4)
+
+def test_an_rgb8_frame_is_converted_to_bgr():
+    """core.imaging.to_jpeg_frame() -- where this image goes on its way to
+    the model -- assumes BGR, and the other producer (frame_source.py) makes
+    that true by asking CvBridge for desired_encoding='bgr8'. This one
+    reshapes the buffer itself, so it has to honour msg.encoding by hand.
+    Handing an rgb8 buffer straight through has the robot describe a blue
+    shirt as orange.
+    """
+    node = _FakeNode()
+    got = []
+    camera = _camera(node=node, topic='/env',
+                     on_frame=lambda img, t: got.append(img))
+    camera.capture_next()
+    msg = _image(height=1, width=1)
+    msg.encoding = 'rgb8'
+    msg.data = np.array([[[10, 20, 30]]], dtype=np.uint8).tobytes()   # R,G,B
+    node.callback(msg)
+    assert len(got) == 1
+    assert tuple(int(v) for v in got[0][0, 0]) == (30, 20, 10), (
+        'red and blue must be swapped on the way out, not on the way to the '
+        'model')
+
+
+def test_a_bgr8_frame_is_passed_through_untouched():
+    node = _FakeNode()
+    got = []
+    camera = _camera(node=node, topic='/env',
+                     on_frame=lambda img, t: got.append(img))
+    camera.capture_next()
+    msg = _image(height=1, width=1)
+    msg.encoding = 'bgr8'
+    msg.data = np.array([[[10, 20, 30]]], dtype=np.uint8).tobytes()
+    node.callback(msg)
+    assert tuple(int(v) for v in got[0][0, 0]) == (10, 20, 30)
+
+
+def test_an_encoding_this_camera_cannot_place_is_dropped_not_guessed_at():
+    node = _FakeNode()
+    got = []
+    camera = _camera(node=node, topic='/env',
+                     on_frame=lambda img, t: got.append(img))
+    camera.capture_next()
+    msg = _image(height=1, width=1)
+    msg.encoding = 'yuv422'
+    node.callback(msg)
+    assert got == []
+    assert camera.pending is True, 'still waiting for a usable frame'
+    assert any('yuv422' in str(line) for line in node.logs), (
+        'a wrong channel order is silent; a dropped frame has to say so')
