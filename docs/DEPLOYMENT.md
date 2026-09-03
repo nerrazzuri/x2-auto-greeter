@@ -128,3 +128,70 @@ the design spec, section 17.
   latest distance reading stays fresh and far, and the gesture fires with
   somebody closer than the floor. Do not rely on the floor alone in a
   crowded scene.
+
+---
+
+## Phase 2: the conversational node
+
+This section covers what changes for `x2_conversation`, the multi-turn node.
+Everything in sections 1–9 above (PC1 off limits, build location, the
+`ANTHROPIC_API_KEY` rule, `STAND_DEFAULT`, a human at the stop control) still
+applies unchanged. Read `docs/HARDWARE_BRINGUP.md` before turning on anything
+this section marks as shipped-disabled — it gives the order and the reason
+for each step.
+
+### 1. New Python dependency, on PC2 only
+
+`faster-whisper` and its `ctranslate2` backend do local speech-to-text.
+PC2 is the only host with internet, and PC1 is off limits for builds of any
+kind:
+
+```bash
+python3 -m pip install --user faster-whisper
+```
+
+The `small` model downloads on first use (~460 MB) into the HuggingFace
+cache. **Never point that cache under `$HOME/aimdk*`** — the SDK README
+reserves those paths for the system and they are erased on firmware
+upgrade. Pre-warm the cache before the demo, not during it:
+
+```bash
+python3 -c "from faster_whisper import WhisperModel; WhisperModel('small', compute_type='int8')"
+```
+
+### 2. `ANTHROPIC_API_KEY`
+
+Same rule as Phase 1: set it in the environment of the launching shell.
+Never in `config/conversation.yaml`, never committed.
+
+```bash
+export ANTHROPIC_API_KEY=...
+```
+
+### 3. Launching
+
+```bash
+ros2 launch x2_greeter conversation.launch.py venue:=clothing_store
+```
+
+**The Phase 1 greeter and this node must not run at the same time.** Both
+register as an MC input source at priority 30, both try to gesture, and
+both hold audio focus — running them together is a fight over the same
+resources, not two features working side by side.
+
+### 4. What ships off
+
+`face.enabled`, `head.enabled`, `head.sweep_on_start`, `head.gaze_follow`,
+and `base_frame.use_env_camera` all ship `false` in `config/conversation.yaml`.
+See `docs/HARDWARE_BRINGUP.md` for the order to turn them on in — the order
+is not arbitrary, and skipping it makes a real fault look like the wrong
+change caused it.
+
+### 5. Verifying `only_voice`
+
+**This check is a human one; there is no service to read the mode back.**
+The node calls `SetAgentProperties` at startup and logs whether the vendor
+agent accepted `only_voice`, but that call cannot be verified later by
+polling — `GetAgentProperties` does not exist in the SDK. Say something to
+the robot and listen: if a second voice answers, the vendor agent is still
+running its own dialogue and `only_voice` did not take.

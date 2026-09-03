@@ -40,6 +40,10 @@ class FakeRobot(Node):
         self.audio_requests = []
         self.motion_requests = []
         self.input_source_requests = []
+        # -- conversation surfaces (Phase 2) --------------------------------
+        self.expressions = []
+        self.head_yaws = []
+        self.utterances = []
         # Name -> priority, mirroring the controller's own registry so that a
         # duplicate ADD is rejected the way the vendor example says it is.
         self.input_sources = {}
@@ -199,6 +203,23 @@ class FakeRobot(Node):
             CommonState.SUCCESS if ok else CommonState.FAILURE)
         response.response.task_id = len(self.input_source_requests)
         return response
+
+    # -- conversation surfaces (Phase 2) --------------------------------
+
+    def show_emoji(self, name, mode=1):
+        self.expressions.append((name, mode))
+        return True
+
+    def look_at(self, yaw_rad):
+        self.head_yaws.append(float(yaw_rad))
+        return True
+
+    def hear(self, text, language='en', confidence=0.95):
+        """Feed an utterance in as though the microphone had produced it."""
+        from x2_greeter.cognition.transcriber import Utterance
+        utterance = Utterance(text, language, confidence)
+        self.utterances.append(utterance)
+        return utterance
 
 
 def main(args=None) -> None:
