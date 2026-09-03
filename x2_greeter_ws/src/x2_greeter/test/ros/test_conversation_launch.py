@@ -80,6 +80,32 @@ def test_an_explicit_venue_argument_still_overrides_the_file():
         'an explicit override has to come after the file to beat it')
 
 
+def test_the_launch_description_still_produces_exactly_one_node():
+    """The parameter list is the point of the fix, but the file it lives in
+    is the thing that starts the robot. Building the node now needs the
+    resolved argument values, so it happens inside an OpaqueFunction rather
+    than at description time -- and a launch file that raises, or quietly
+    produces no node, is a demo that never begins.
+    """
+    from launch import LaunchContext
+    from launch.actions import DeclareLaunchArgument, OpaqueFunction
+    from launch_ros.actions import Node
+
+    module = _launch_module()
+    description = module.generate_launch_description()
+    context = LaunchContext()
+    for entity in description.entities:
+        if isinstance(entity, DeclareLaunchArgument):
+            entity.execute(context)
+
+    opaque = [entity for entity in description.entities
+              if isinstance(entity, OpaqueFunction)]
+    assert len(opaque) == 1
+    nodes = [entity for entity in opaque[0].execute(context)
+             if isinstance(entity, Node)]
+    assert len(nodes) == 1, 'exactly one x2_conversation node'
+
+
 def test_the_declared_default_for_venue_is_empty():
     from launch.actions import DeclareLaunchArgument
     from launch.utilities import perform_substitutions
