@@ -37,6 +37,18 @@
       reject_cooldown_s: 5.0
       confirm_timeout_s: 10.0
 
+    mc_input:
+      # The controller discards motion commands from unregistered sources
+      # (SDK docs 5.1.3). Priority must stay in the documented SDK band 20-39:
+      # the remote controller sits at 80 and must keep its override, and
+      # 100-80 is reserved for emergency stop and safety modes. A source that
+      # goes quiet for `timeout_ms` is re-arbitrated, which is what lets the
+      # operator take the robot back simply by picking the remote up.
+      enabled: true
+      name: x2_greeter
+      priority: 30
+      timeout_ms: 1000
+
     backend:
       # claude | canned. Named 'provider' rather than 'backend' because ROS 2
       # forbids a parameter that is also a prefix of another parameter.

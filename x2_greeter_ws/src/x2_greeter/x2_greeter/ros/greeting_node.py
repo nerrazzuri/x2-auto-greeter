@@ -30,6 +30,7 @@ from x2_greeter.core.presence import PresenceConfig, PresenceState, PresenceTrac
 from x2_greeter.core.types import SceneContext
 from x2_greeter.ros.frame_source import FrameSource
 from x2_greeter.ros.gesture import GestureDispatcher
+from x2_greeter.ros.input_source import maybe_register
 from x2_greeter.ros.mode_guard import ModeGuard
 from x2_greeter.ros.speech import SpeechDispatcher
 
@@ -121,6 +122,17 @@ class GreetingNode(Node):
             audio_file_count=int(self._param('speech.audio_file_count')),
             rng=rng,
             callback_group=self._callback_group)
+        # Registered before the first gesture can be dispatched: the arbiter
+        # discards commands from unknown sources. Failure is logged, never
+        # fatal -- see ros/input_source.py.
+        self.input_source = maybe_register(
+            self,
+            enabled=bool(self._param('mc_input.enabled')),
+            name=self._param('mc_input.name'),
+            priority=int(self._param('mc_input.priority')),
+            timeout_ms=int(self._param('mc_input.timeout_ms')),
+            callback_group=self._callback_group)
+
         self.gesture = GestureDispatcher(self, callback_group=self._callback_group)
         self.mode_guard = ModeGuard(
             self, require_stand_default=bool(self._param('safety.require_stand_default')),
@@ -170,6 +182,11 @@ class GreetingNode(Node):
         self.declare_parameter('presence.cooldown_s', 30.0)
         self.declare_parameter('presence.reject_cooldown_s', 5.0)
         self.declare_parameter('presence.confirm_timeout_s', 10.0)
+
+        self.declare_parameter('mc_input.enabled', True)
+        self.declare_parameter('mc_input.name', 'x2_greeter')
+        self.declare_parameter('mc_input.priority', 30)
+        self.declare_parameter('mc_input.timeout_ms', 1000)
 
         self.declare_parameter('backend.provider', 'claude')
         self.declare_parameter('backend.model', 'claude-opus-5')
@@ -384,6 +401,14 @@ class GreetingNode(Node):
     def destroy_node(self) -> bool:
         self._greeting_pool.shutdown(wait=True)
         self._action_pool.shutdown(wait=True)
+        # Give the source back, so the next run gets a clean ADD rather than
+        # the restart path. Best effort: we are already on the way out.
+        if getattr(self, 'input_source', None) is not None:
+            try:
+                self.input_source.deregister()
+            except Exception as exc:                   # noqa: BLE001 - shutdown
+                self.get_logger().warning(
+                    f'could not release the input source: {type(exc).__name__}: {exc}')
         return super().destroy_node()
 
 

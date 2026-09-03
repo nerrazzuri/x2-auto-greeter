@@ -62,3 +62,13 @@ def test_the_backend_timeout_cannot_outlive_the_confirmation_window():
         'call is allowed to run longer than the presence tracker waits for '
         'it, a greeting worker can outlive the confirmation window and '
         'apply its verdict to somebody who has since walked off')
+
+
+def test_the_input_source_priority_stays_below_the_remote_controller():
+    mc_input = _params()['mc_input']
+    assert 20 <= mc_input['priority'] <= 39, (
+        f"mc_input.priority ({mc_input['priority']}) must ship inside the "
+        'documented SDK band 20-39. The remote controller arbitrates at 80 '
+        'and 100-80 is reserved for emergency stop and safety modes, so a '
+        'greeter registered at or above 80 would take away the operator\'s '
+        'ability to override it by picking the remote up')

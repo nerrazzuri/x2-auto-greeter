@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import numpy as np
 import rclpy
-from aimdk_msgs.msg import CommonState, McAction, McActionStatus
-from aimdk_msgs.srv import GetMcAction, PlayAudioFile, PlayTts, SetMcPresetMotion
+from aimdk_msgs.msg import CommonState, McAction, McActionStatus, McInputAction
+from aimdk_msgs.srv import (GetMcAction, PlayAudioFile, PlayTts, SetMcInputSource,
+                            SetMcPresetMotion)
 from cv_bridge import CvBridge
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
@@ -29,6 +30,7 @@ class FakeRobot(Node):
                  action_desc: str = 'fake',
                  action_status: int = McActionStatus.RUNNING,
                  tts_succeeds: bool = True,
+                 input_source_mode: str = 'registry',
                  distance_mm: int = 2000,
                  width: int = 640, height: int = 480,
                  rate_hz: float = 10.0) -> None:
@@ -37,6 +39,10 @@ class FakeRobot(Node):
         self.tts_requests = []
         self.audio_requests = []
         self.motion_requests = []
+        self.input_source_requests = []
+        # Name -> priority, mirroring the controller's own registry so that a
+        # duplicate ADD is rejected the way the vendor example says it is.
+        self.input_sources = {}
         self.mode_queries = 0
         self.current_action = current_action
         # The real X2 controller leaves current_action.value at its
@@ -45,6 +51,13 @@ class FakeRobot(Node):
         self.action_desc = action_desc
         self.action_status = action_status
         self.tts_succeeds = tts_succeeds
+        # How SetMcInputSource answers. Settable after construction because
+        # rclpy binds the callback at create_service time -- a test cannot
+        # swap the handler out, so the behaviour has to be a knob:
+        #   registry    -- accept/reject per the name registry (the real thing)
+        #   refuse      -- always FAILURE, with a clean header.code
+        #   header_only -- fill only the header, leave state at UNKNOWN
+        self.input_source_mode = input_source_mode
 
         group = ReentrantCallbackGroup()
         self.create_service(PlayTts, '/aimdk_5Fmsgs/srv/PlayTts',
@@ -55,6 +68,8 @@ class FakeRobot(Node):
                             self._on_preset_motion, callback_group=group)
         self.create_service(GetMcAction, '/aimdk_5Fmsgs/srv/GetMcAction',
                             self._on_get_action, callback_group=group)
+        self.create_service(SetMcInputSource, '/aimdk_5Fmsgs/srv/SetMcInputSource',
+                            self._on_set_input_source, callback_group=group)
 
         self._bridge = CvBridge()
         self._width = width
@@ -132,6 +147,57 @@ class FakeRobot(Node):
         response.info.current_action.value = int(self.current_action)
         response.info.action_desc = self.action_desc
         response.info.status.value = int(self.action_status)
+        return response
+
+    def _on_set_input_source(self, request, response):
+        """Add/modify/delete a named source, rejecting the impossible cases.
+
+        The vendor example spells out the two failures worth reproducing:
+        ADDing a name that already exists, and MODIFY/DELETE of one that does
+        not. Accepting everything would make the registrar's ADD-then-MODIFY
+        fallback untestable.
+        """
+        self.input_source_requests.append(request)
+        name = request.input_source.name
+        action = request.action.value
+        known = name in self.input_sources
+
+        if self.input_source_mode == 'header_only':
+            # A controller that never touches `state`. header.code is a
+            # default-zero field, so this is what the caller must not confuse
+            # with a refusal -- nor a refusal with this.
+            response.response.header.code = 0
+            response.response.task_id = len(self.input_source_requests)
+            return response
+        if self.input_source_mode == 'refuse':
+            response.response.header.code = 0          # clean header ...
+            response.response.state.value = CommonState.FAILURE   # ... refused anyway
+            response.response.task_id = len(self.input_source_requests)
+            return response
+
+        if action == McInputAction.INPUTACTION_ADD and not known:
+            self.input_sources[name] = request.input_source.priority
+            ok = True
+        elif action == McInputAction.INPUTACTION_MODIFY and known:
+            self.input_sources[name] = request.input_source.priority
+            ok = True
+        elif action == McInputAction.INPUTACTION_DELETE and known:
+            del self.input_sources[name]
+            ok = True
+        elif action in (McInputAction.INPUTACTION_ENABLE,
+                        McInputAction.INPUTACTION_DISABLE) and known:
+            ok = True
+        else:
+            ok = False
+
+        self.get_logger().info(
+            f'input source {name!r} action {action}: '
+            f"{'accepted' if ok else 'rejected'}")
+        # As with preset motion, the real answer is in `state`.
+        response.response.header.code = 0
+        response.response.state.value = (
+            CommonState.SUCCESS if ok else CommonState.FAILURE)
+        response.response.task_id = len(self.input_source_requests)
         return response
 
 
