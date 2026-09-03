@@ -23,6 +23,8 @@ from x2_greeter.cognition.dialogue import Turn  # noqa: E402
 from x2_greeter.cognition.transcriber import Utterance  # noqa: E402
 from x2_greeter.core.scene import AddressingMode, Person, SceneSnapshot  # noqa: E402
 
+import numpy as np
+
 
 def _conversation_node_class():
     from x2_greeter.ros.conversation_node import ConversationNode
@@ -227,6 +229,27 @@ def test_one_turn_walks_transcribe_respond_gesture_speak(node):
                       'speech.say')]
     assert names == ['transcribe', 'backend.respond', 'gesture.play',
                      'speech.say']
+
+
+def test_a_raw_camera_frame_reaches_the_backend_as_a_jpeg(node):
+    """Production path: FrameSource/EnvCamera hand the node raw numpy
+    arrays (set here directly, bypassing detection/scene observation --
+    those are exercised elsewhere and are not what this test is about).
+    ClaudeDialogueBackend.respond() reads .media_type/.data off both
+    frame and base_frame, so a raw ndarray must never reach it -- only a
+    core.imaging.JpegFrame (or, for a test double, whatever non-ndarray
+    object was handed in, untouched -- see
+    test_the_backend_gets_a_fresh_frame_every_turn below).
+    """
+    node._on_scene(_scene(), at_s=0.0)
+    node._greeting_finished(at_s=0.5)
+    node._base_frame = np.zeros((4, 4, 3), dtype=np.uint8)
+    node._frame = np.zeros((4, 4, 3), dtype=np.uint8)
+    _drive_turn(node)
+    for sent in (node.backend.last['base_frame'], node.backend.last['frame']):
+        assert not isinstance(sent, np.ndarray)
+        assert sent.media_type == 'image/jpeg'
+        assert len(sent.data) > 0
 
 
 def test_the_backend_gets_a_fresh_frame_every_turn(node):

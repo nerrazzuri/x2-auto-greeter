@@ -36,6 +36,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
@@ -52,6 +53,7 @@ from x2_greeter.core.detectors import build_detector
 from x2_greeter.core.faces import MODE_ONCE
 from x2_greeter.core.gestures import DEFAULT_ENABLED as DEFAULT_GESTURES
 from x2_greeter.core.gestures import GestureSelector
+from x2_greeter.core.imaging import to_jpeg_frame
 from x2_greeter.core.language import ALLOWED_LANGUAGES, LanguagePolicy
 from x2_greeter.core.scene import SceneConfig, observe
 from x2_greeter.core.venue import load_venue
@@ -84,6 +86,23 @@ _FALLBACK_LINES = {
     'en': "Sorry, I didn't catch that.",
     'zh': '抱歉，我没听清楚。',
 }
+
+
+def _as_jpeg_frame(frame):
+    """Encode a raw camera frame for the dialogue backend, in memory.
+
+    ClaudeDialogueBackend.respond() reads .media_type/.data off both
+    base_frame and frame, i.e. it expects core.imaging.JpegFrame objects, not
+    raw arrays -- the same conversion greeting_node.py applies at its own
+    point of use. A non-ndarray (None, or a test double such as a plain
+    object() sentinel) passes through untouched: nothing here needs to
+    understand a fake backend's test fixtures, and this is exactly the guard
+    that keeps the identity-based unit tests (backend.last['frame'] is
+    first) working unchanged.
+    """
+    if isinstance(frame, np.ndarray):
+        return to_jpeg_frame(frame)
+    return frame
 
 
 class ConversationNode(Node):
@@ -461,9 +480,11 @@ class ConversationNode(Node):
             language = self.conversation.language
         scene = self._scene
 
+        base_frame = _as_jpeg_frame(self._base_frame)
+        frame = _as_jpeg_frame(self._frame)
         try:
             turn = self.backend.respond(
-                base_frame=self._base_frame, frame=self._frame, scene=scene,
+                base_frame=base_frame, frame=frame, scene=scene,
                 venue=self.venue, history=history, utterance=utterance,
                 language=language, child=self._child)
         except BackendUnavailable:
