@@ -16,7 +16,9 @@ pytestmark = pytest.mark.ros
 
 def _vendor_emotion_ids():
     from aimdk_msgs.srv import PlayEmoji
-    return {value: name for name, value in vars(PlayEmoji).items()
+    # ROS 2 attaches .srv request constants to the Request class, not the
+    # service wrapper.
+    return {value: name for name, value in vars(PlayEmoji.Request).items()
             if isinstance(value, int) and name.startswith('EMOTION_')}
 
 
@@ -32,11 +34,11 @@ def test_every_catalogued_emotion_id_is_a_vendor_constant():
 def test_the_thinking_emoji_is_the_vendor_thinking_eye():
     from aimdk_msgs.srv import PlayEmoji
 
-    assert CATALOGUE['thinking'].emotion_id == PlayEmoji.EMOTION_EYE_THINKING
+    assert CATALOGUE['thinking'].emotion_id == PlayEmoji.Request.EMOTION_EYE_THINKING
 
 
 def test_the_modes_match_the_vendor_constants():
     from aimdk_msgs.srv import PlayEmoji
 
-    assert MODE_ONCE == PlayEmoji.EMOTION_MODE_ONCE
-    assert MODE_LOOP == PlayEmoji.EMOTION_MODE_LOOP
+    assert MODE_ONCE == PlayEmoji.Request.EMOTION_MODE_ONCE
+    assert MODE_LOOP == PlayEmoji.Request.EMOTION_MODE_LOOP
