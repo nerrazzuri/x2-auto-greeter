@@ -21,14 +21,27 @@ def _stamp_seconds(msg) -> float:
     return msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
 
 
+def rotate_180(image: np.ndarray) -> np.ndarray:
+    """Turn an image half a turn, returning a contiguous array.
+
+    `image[::-1, ::-1]` alone is a reversed *view*; cv2.dnn (and anything else
+    reading the buffer directly) needs contiguous memory, so the copy is not
+    optional. Rows and columns are both reversed and the channel axis, when
+    there is one, is left alone -- reversing it too would silently swap the
+    colour order on top of the rotation.
+    """
+    return np.ascontiguousarray(image[::-1, ::-1])
+
+
 class FrameSource:
     def __init__(self, node, rgb_topic: str, depth_topic: str, on_frame: FrameCallback,
                  max_sync_skew_s: float = 0.15, stale_warn_s: float = 5.0,
-                 callback_group=None) -> None:
+                 rotate_180: bool = False, callback_group=None) -> None:
         self._node = node
         self._on_frame = on_frame
         self._max_sync_skew_s = float(max_sync_skew_s)
         self._stale_warn_s = float(stale_warn_s)
+        self._rotate_180 = bool(rotate_180)
         self._bridge = CvBridge()
         self._latest_depth = None
         self._latest_depth_stamp = 0.0
@@ -56,10 +69,16 @@ class FrameSource:
 
     def _on_depth(self, msg: Image) -> None:
         try:
-            self._latest_depth = self._bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+            depth = self._bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
         except Exception as exc:                       # noqa: BLE001 - a bad frame is not fatal
             self._node.get_logger().warning(f'could not convert depth frame: {exc}')
             return
+        # Rotated with the RGB frame or not at all. A bounding box found in the
+        # rotated colour image is read against this array, so rotating one and
+        # not the other would point every distance lookup at the diagonally
+        # opposite corner of the scene -- and that distance is what the 1.0 m
+        # arm's-reach interlock is made of.
+        self._latest_depth = rotate_180(depth) if self._rotate_180 else depth
         self._latest_depth_stamp = _stamp_seconds(msg)
 
     def _on_rgb(self, msg: Image) -> None:
@@ -68,6 +87,8 @@ class FrameSource:
         except Exception as exc:                       # noqa: BLE001 - a bad frame is not fatal
             self._node.get_logger().warning(f'could not convert RGB frame: {exc}')
             return
+        if self._rotate_180:
+            bgr = rotate_180(bgr)
 
         stamp = _stamp_seconds(msg)
         self._last_rgb_at = self._now()

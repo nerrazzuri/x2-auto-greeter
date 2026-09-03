@@ -137,6 +137,7 @@ class GreetingNode(Node):
             on_frame=self._on_frame,
             max_sync_skew_s=self._param('camera.max_sync_skew_s'),
             stale_warn_s=self._param('camera.stale_warn_s'),
+            rotate_180=bool(self._param('camera.rotate_180')),
             callback_group=self._perception_group)
 
         self.get_logger().info(
@@ -154,6 +155,7 @@ class GreetingNode(Node):
         self.declare_parameter('camera.depth_scale', 0.001)
         self.declare_parameter('camera.max_sync_skew_s', 0.15)
         self.declare_parameter('camera.stale_warn_s', 5.0)
+        self.declare_parameter('camera.rotate_180', False)
 
         self.declare_parameter('detect.detector', 'mobilenet_ssd')
         self.declare_parameter('detect.model_dir', '')

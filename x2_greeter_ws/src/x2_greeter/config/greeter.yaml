@@ -9,6 +9,15 @@
       depth_scale: 0.001
       max_sync_skew_s: 0.15
       stale_warn_s: 5.0
+      # Turn both the colour and depth frames half a turn before use. Needed
+      # where the head RGB-D module is mounted upside down: MobileNet-SSD does
+      # not recognise an inverted person (measured on hardware: 0.00 as-is,
+      # 0.92 rotated, on the same frame that scored sofa=0.75 either way), so
+      # the symptom is a node that runs at full rate and never greets anyone.
+      # Check with `python3 tools/check_camera_orientation.py` before setting.
+      # The proper fix is the driver's own color_rotation/depth_rotation
+      # arguments; this exists because that means restarting a robot service.
+      rotate_180: false
 
     detect:
       # mobilenet_ssd | hog | scripted. mobilenet_ssd falls back to hog with a
