@@ -14,12 +14,22 @@ cross. Read this one first, then work from the runbook.
 
 ## The one thing to know before anything else
 
-**Nothing in this repository has ever run against a real robot.** Every test is
-offline, against `x2_greeter/sim/fake_robot.py`. 250 tests pass and the safety
-interlocks are mutation-verified, but "the fake robot accepted our service call"
-is not evidence about the real controller. Treat the first hardware session as
-an experiment, not a deployment: you are finding out whether the assumptions
-hold, and several of them are explicitly marked unknown below.
+**This has now run against a real robot, once.** On 2026-09-03 an AgiBot X2
+greeted a person out loud and waved at them, using the Claude backend, and the
+safety interlocks refused the gesture correctly whenever the robot was not in
+force-control stand. That session is the source of everything in *What the
+first hardware session found* below.
+
+Do not read that as "it works". One session on one robot found **four** separate
+defects, and every one of them presented as a system that looked healthy: the
+node ran at 30 Hz and 200% CPU, printed nothing, and greeted nobody. Assume the
+next robot has a fifth. What the session really bought you is that the unknowns
+below are now measurements rather than guesses, and that the failure modes have
+names.
+
+Every test is still offline, against `x2_greeter/sim/fake_robot.py` — 283 of
+them now, and "the fake robot accepted our service call" is still not evidence
+about the real controller.
 
 ---
 
@@ -137,21 +147,27 @@ for h in 10.0.1.40 10.0.1.41 10.0.1.42; do ping -c1 -W1 "$h" >/dev/null && echo 
 ssh agi@10.0.1.41       # PC2 — this is where you work
 ```
 
-**An unknown you must resolve on the robot, not guess:** the DDS configuration.
-ROS 2 nodes only see each other when `ROS_DOMAIN_ID` and the RMW settings match
-across hosts. This repo does not set them and no value is documented here,
-because inventing one would be worse than admitting the gap. On PC2, read what
-the robot's own environment already uses:
+**The DDS configuration — do not improvise it.** Source the robot's own
+environment and inherit whatever it uses:
 
 ```bash
-env | grep -E 'ROS_DOMAIN_ID|RMW_|FASTRTPS|CYCLONEDDS'
-grep -E 'ROS_DOMAIN_ID|RMW_' ~/.bashrc
-ros2 topic list | head -40        # non-empty means you are on the right domain
+source /agibot/software/entry/cfg/basic_env.sh
 ```
 
-Match those settings in whatever shell runs the greeter. `ros2 topic list`
-returning nothing while the robot is up is the signature of a domain mismatch —
-not a broken robot.
+That script unsets `ROS_DOMAIN_ID` (so, domain 0), sets `ROS_LOCALHOST_ONLY=0`,
+and — the part that matters — points `FASTRTPS_DEFAULT_PROFILES_FILE` at the
+robot's own FastDDS profile, which restricts transports to SHM plus a
+single-interface UDP whitelist.
+
+**Getting the domain right and the profile wrong is the trap.** Without that
+profile your participant does not match the robot's. `ros2 topic list` still
+lists every topic, `ros2 topic hz` reports no error, and not one frame ever
+arrives. It looks exactly like a camera that is powered but not streaming. This
+cost most of a session before the orbbec driver's own log showed it publishing
+happily to the very topics we could not receive.
+
+`ros2 topic list` returning *nothing* is a domain mismatch. Topics that list
+but never deliver is the profile.
 
 ---
 
@@ -182,7 +198,15 @@ rsync -av --exclude '.git' --exclude '__pycache__' \
 
 ```bash
 source /opt/ros/humble/setup.bash
-source ~/aimdk/install/local_setup.bash        # provides aimdk_msgs — read-only, never write here
+# aimdk_msgs. NOT ~/aimdk/install/local_setup.bash — that install tree does not
+# exist on a v1.0 firmware image; ~/aimdk holds SDK source and docs only, and
+# the prebuilt_aarch64 tree inside it carries a reduced 28-service subset. The
+# full 178-service build ships here, without colcon setup scripts, so put it on
+# the paths by hand:
+_AIMDK=/agibot/software/common
+export AMENT_PREFIX_PATH="$_AIMDK:$AMENT_PREFIX_PATH"
+export PYTHONPATH="$_AIMDK/local/lib/python3.10/dist-packages:$PYTHONPATH"
+export LD_LIBRARY_PATH="$_AIMDK/lib:$LD_LIBRARY_PATH"
 python3 -m pip install --user "anthropic>=1.0" pyyaml
 sudo apt install ros-humble-cv-bridge python3-opencv python3-numpy
 
@@ -238,9 +262,22 @@ ros2 topic hz /aima/hal/sensor/rgbd_head_front/rgb_image
 ros2 topic echo --field encoding /aima/hal/sensor/rgbd_head_front/depth_image --once
 ```
 
-- If the topics are wrong, fix `camera.rgb_topic` / `camera.depth_topic`.
+- **Check the orientation before anything else:** `python3
+  tools/check_camera_orientation.py`, with somebody standing 2 m in front. On
+  the first robot the head module was mounted upside down, and MobileNet-SSD
+  does not recognise an inverted person while still recognising inverted
+  furniture — so the node ran at full rate, scored `sofa=0.75` on every frame,
+  and greeted nobody, silently. If the tool reports `rot-180` finding a person
+  and `as-is` not, set `camera.rotate_180: true`.
+- If the topics are wrong, fix `camera.rgb_topic` / `camera.depth_topic`. On a
+  v1.0 image the RGB-D stream comes from the `orbbec_camera` service, which
+  remaps onto exactly the topics this repo expects; the `rgbd_camera_module`
+  block in `hal_sensor_orin`'s own config is commented out and is a red
+  herring.
 - **Depth encoding decides `camera.depth_scale`:** `16UC1` (millimetres) →
-  `0.001`; `32FC1` (metres) → `1.0`. Getting this wrong by 1000× makes every
+  `0.001`; `32FC1` (metres) → `1.0`. Measured on the first robot: `16UC1`,
+  1280x720, ~30 Hz, so the shipped `0.001` is right — but measure, do not
+  inherit this sentence. Getting this wrong by 1000× makes every
   distance gate meaningless — including the 1.0 m arm's-reach floor. Verify it
   by standing at a tape-measured 2 m and reading the logged distance, not by
   assuming.
@@ -293,10 +330,65 @@ person can trigger another.
 
 ---
 
+## What the first hardware session found
+
+Four defects, on one robot, in one afternoon. Every one of them looked like a
+healthy system. Read this before you debug anything, because the shape they
+share is more useful than the individual fixes: **on this platform, the
+default-zero field and the silently-unmatched endpoint are the two ways things
+break, and neither prints an error.**
+
+| # | What was wrong | What it looked like | Fixed by |
+|---|---|---|---|
+| 1 | `FASTRTPS_DEFAULT_PROFILES_FILE` not set | every topic lists, `topic hz` is silent, zero frames | source the robot's `basic_env.sh` (Stage 1) |
+| 2 | head camera mounted upside down | 30 Hz, 200% CPU, `sofa=0.75`, never a person, no log line | `camera.rotate_180` (Stage 5) |
+| 3 | `backend.timeout_s: 2.5` unreachable (measured 3.1-6.0 s) | every cloud call timed out into a canned phrase | raised to 8.0 s, from measurement |
+| 4 | `McAction.value` left at default zero by the controller | "robot is in motion mode 0", gesture refused forever, robot demonstrably standing | read `action_desc` when the id is unset |
+
+**The lesson worth carrying:** #3 and #4 both come from trusting a number the
+vendor never populated. The codebase already knew this shape — `ResponseHeader.
+code` is default-zero, which is why `gesture.py` reads `state` first — but the
+same trap has at least three more instances: `McAction.value`, `task_id`
+(populated on rejection, zero on success), and `McActionInfo.status`. When a
+vendor field reads as zero, establish whether zero is a value in that enum
+before believing it. For `McAction` it is not: the enum starts at 1.
+
+### Things that turned out **not** to be prerequisites
+
+Time was spent on both of these before hardware settled them:
+
+- **`Develop_MC` system state.** Preset motions work with the system in
+  `Business`. The state migration matters for other MC interfaces, not this one.
+- **MC input source registration.** Gestures were confirmed working on hardware
+  with `SetMcInputSource` failing on every attempt, and
+  `SetMcPresetMotion.Request` carries no source field for the arbiter to read.
+  The greeter registers anyway, best-effort, because the docs say unknown
+  sources are discarded — but it is not what stands between you and a wave.
+
+### Still unexplained
+
+- **Gestures alternate accept/reject.** Across one session: accept, reject,
+  accept, reject, in strict alternation, with `state=FAILURE` returned in ~9 ms
+  — a refusal, not a timeout — while the mode read `STAND_DEFAULT`/`RUNNING`
+  throughout. The most likely story is the arm ending a wave away from neutral
+  and the controller refusing to repeat from there, which would make it a
+  pose-reset problem rather than an arbitration one. Not diagnosed. Do not
+  "fix" it by setting `interrupt=True` in `gesture.py` before you know.
+- **`aimdk_msgs` ships in several versions on one robot** (0.8.24 under
+  `/agibot/software/common` and on PC1's `mc`; 1.2.2 bundled with
+  `orbbec_camera`). Matching PC1's version is what matters; that it is even a
+  question is worth knowing.
+
+---
+
 ## When it does not work
 
 | Symptom | Most likely cause | What to do |
 |---|---|---|
+| Node starts, nothing ever happens, no errors, CPU near zero | `FASTRTPS_DEFAULT_PROFILES_FILE` not set — topics list, no frames arrive | source `basic_env.sh`; confirm with `tools/check_camera_orientation.py`, which says so explicitly when it receives nothing |
+| Node starts, **CPU is high**, nothing ever happens, no errors | frames are arriving and the detector finds nobody — camera orientation | `python3 tools/check_camera_orientation.py` with a person in frame; set `camera.rotate_180` if it says so |
+| Greetings are always canned though `backend.provider: claude` | every cloud call exceeding `backend.timeout_s` | measure the real latency before touching the timeout; 2.5 s was unreachable on hardware |
+| "robot is in motion mode 0", but the robot is plainly standing | controller left `McAction.value` at its default zero | already handled — the guard reads `action_desc`. If you see this on a *new* firmware, check whether zero is a member of the enum before believing it |
 | Node starts, nothing ever happens, no errors | wrong `camera.rgb_topic` | **This is the failure the watchdog cannot warn about** — see Known gaps. Check `ros2 topic hz` on the configured topic yourself; do not wait for a log line. |
 | `ros2 topic list` is empty | DDS domain mismatch | Stage 1 — match `ROS_DOMAIN_ID`/RMW to the robot's own environment |
 | **Speaks, but never gestures** | the interlocks doing their job | Check, in order: is the robot in `STAND_DEFAULT`? Is the person inside 1.0 m? Is the distance reading stale? All three are logged. The third is the sneaky one — next row. |

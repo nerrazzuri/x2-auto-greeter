@@ -18,8 +18,10 @@ an unsafe pose or distance drops the gesture while still speaking.
 
 ## Safety and privacy constraints
 
-- **Nothing here has ever run against a real robot.** All 250 tests are offline,
-  against `x2_greeter/sim/fake_robot.py`.
+- **This has run against a real robot once** (2026-09-03: an X2 greeted a person
+  and waved). All 283 tests are still offline, against
+  `x2_greeter/sim/fake_robot.py`. That session found four defects, each of which
+  presented as a healthy system — see `docs/AGENT_BRINGUP_GUIDE.md`.
 - Never build or run on **PC1 (10.0.1.40)** — prohibited by the SDK docs. The
   node runs on **PC2 (10.0.1.41)**; audio assets live on **PC3 (10.0.1.42)**.
 - The node never changes the robot's motion mode and never issues locomotion
@@ -31,10 +33,10 @@ an unsafe pose or distance drops the gesture while still speaking.
 ## Tests
 
 ```bash
-python3 -m pytest -q            # 181 passed, 69 deselected — no ROS needed
+python3 -m pytest -q            # 182 passed, 101 deselected — no ROS needed
 ```
 
-The 69 deselected tests need `rclpy` and the vendor `aimdk_msgs`. They run in the
+The 101 deselected tests need `rclpy` and the vendor `aimdk_msgs`. They run in the
 Docker harness, which needs the AimDK SDK archive unpacked into `sdk/` (gitignored,
 not redistributed here):
 
