@@ -338,3 +338,230 @@ def test_a_disabled_head_is_never_asked_to_sweep():
     node._on_scene(_scene(), at_s=0.0)
     assert 'head.sweep' not in log.names()
     node.destroy_node()
+
+
+# -- Fix round 2 ------------------------------------------------------------
+#
+# Findings 1/4: the cooldown was a permanent lockout (reset() was never
+# called from _on_tick) and _after_close() was level-triggered (it fired
+# once per tick for the whole ~20 s cooldown window instead of once at the
+# transition). Finding 2: rclpy-entered callback bodies must not let an
+# exception escape. Finding 3: head.gaze_follow ships as a config flag but
+# nothing read it. Finding 5: Face's default spin_until would re-enter the
+# MultiThreadedExecutor already spinning this node from the worker thread.
+
+
+class _FakeAgentMode:
+    def set_only_voice(self):
+        return True
+
+
+class _FakeModeGuard:
+    def gesturing_allowed(self):
+        return True
+
+
+def test_a_new_session_can_start_after_the_cooldown_expires(node):
+    node._on_scene(_scene(), at_s=0.0)
+    node._greeting_finished(at_s=0.5)
+    assert node.conversation.state is SessionState.LISTENING
+    silence_timeout_s = node.get_parameter('conversation.silence_timeout_s').value
+    cooldown_s = node.get_parameter('conversation.cooldown_s').value
+    close_at = 0.5 + silence_timeout_s + 1.0
+    node._on_tick(at_s=close_at)
+    assert node.conversation.state is SessionState.COOLDOWN
+
+    # Ticking while still inside the cooldown window must not reset early.
+    node._on_tick(at_s=close_at + 1.0)
+    assert node.conversation.state is SessionState.COOLDOWN
+
+    node._on_tick(at_s=close_at + cooldown_s + 1.0)
+    assert node.conversation.state is SessionState.IDLE, (
+        'reset() must run once the cooldown window has actually elapsed, '
+        'or a process can only ever hold one conversation for its whole '
+        'lifetime')
+
+    said_before = len(node.speech.said)
+    node._on_scene(_scene(), at_s=close_at + cooldown_s + 2.0)
+    assert node.conversation.state is SessionState.GREETING, (
+        'a fresh person after the cooldown must start a full second session')
+    assert len(node.speech.said) > said_before
+
+
+def test_after_close_fires_exactly_once_across_the_cooldown_window(node):
+    node._on_scene(_scene(), at_s=0.0)
+    node._greeting_finished(at_s=0.5)
+    silence_timeout_s = node.get_parameter('conversation.silence_timeout_s').value
+    close_at = 0.5 + silence_timeout_s + 1.0
+    node._on_tick(at_s=close_at)
+    assert node.conversation.state is SessionState.COOLDOWN
+    assert node.log.names().count('face.clear') == 1
+
+    for i in range(1, 6):
+        node._on_tick(at_s=close_at + i)
+    assert node.conversation.state is SessionState.COOLDOWN
+    assert node.log.names().count('face.clear') == 1, (
+        '_after_close must fire exactly once at the transition into '
+        'COOLDOWN, not once per tick for the whole cooldown window')
+
+
+def test_on_scene_does_not_propagate_when_speech_raises(node):
+    def _raise(*args, **kwargs):
+        raise RuntimeError('boom')
+
+    node.speech.say = _raise
+    node._on_scene(_scene(), at_s=0.0)             # must not raise
+    assert node.conversation.state is SessionState.GREETING
+
+
+def test_on_frame_does_not_propagate_when_on_scene_raises(node):
+    node._detections = lambda rgb: []               # bypass the real detector
+
+    def _raise(*args, **kwargs):
+        raise RuntimeError('boom')
+
+    node._on_scene = _raise
+    node._on_frame(np.zeros((4, 4, 3), dtype=np.uint8), None, 0.0)  # must not raise
+
+
+def test_on_tick_does_not_propagate_when_after_close_raises(node):
+    node._on_scene(_scene(), at_s=0.0)
+    node._greeting_finished(at_s=0.5)
+
+    def _raise():
+        raise RuntimeError('boom')
+
+    node.face.clear = _raise
+    silence_timeout_s = node.get_parameter('conversation.silence_timeout_s').value
+    node._on_tick(at_s=0.5 + silence_timeout_s + 1.0)  # must not raise
+    assert node.conversation.state is SessionState.COOLDOWN, (
+        'the FSM transition must land even though _after_close raised')
+
+
+def test_on_utterance_does_not_propagate_on_an_unexpected_queue_error(node):
+    def _raise(*args, **kwargs):
+        raise RuntimeError('boom')
+
+    node._queue.put_nowait = _raise
+    node._on_utterance(b'\x00' * 10, 0.0)            # must not raise
+
+
+def test_greeting_finished_does_not_propagate_when_greeted_raises(node):
+    node._on_scene(_scene(), at_s=0.0)
+
+    def _raise(at_s):
+        raise RuntimeError('boom')
+
+    node.conversation.greeted = _raise
+    node._greeting_finished(at_s=0.5)                # must not raise
+
+
+def _off_centre_person():
+    return Person(bbox=(500, 0, 620, 200), confidence=0.9, distance_m=1.4,
+                  center_offset=0.5, stature_m=1.7, likely_child=False)
+
+
+def test_gaze_follow_commands_a_clamped_yaw_for_an_off_centre_subject():
+    from x2_greeter.core.gaze import MAX_YAW_RAD
+
+    log = _Recorder()
+    node = _conversation_node_class()(
+        face=_FakeFace(log), speech=_FakeSpeech(log),
+        gestures=_FakeGestures(log), head=_FakeHead(log),
+        transcriber=_FakeTranscriber(log), backend=_FakeBackend(log),
+        audio_source=None, frame_source=None, env_camera=None,
+        agent_mode=_FakeAgentMode(), safety_gate=_FakeModeGuard(),
+        start_worker=False,
+        overrides={'head.enabled': True, 'head.gaze_follow': True})
+    node.log = log
+    node._on_scene(_scene(), at_s=0.0)               # locks mode to INDIVIDUAL
+    subject = _off_centre_person()
+    snapshot = SceneSnapshot(people=(subject,), subject=subject,
+                             mode=AddressingMode.INDIVIDUAL, at_s=1.0)
+    node._update_gaze(snapshot, image_width=640, at_s=1.0)
+    assert node.head.yaws, 'expected a look_at() command'
+    yaw = node.head.yaws[-1]
+    assert yaw != 0.0
+    assert abs(yaw) <= MAX_YAW_RAD + 1e-9
+    node.destroy_node()
+
+
+def test_gaze_follow_commands_nothing_when_head_disabled():
+    log = _Recorder()
+    node = _conversation_node_class()(
+        face=_FakeFace(log), speech=_FakeSpeech(log),
+        gestures=_FakeGestures(log), head=_FakeHead(log),
+        transcriber=_FakeTranscriber(log), backend=_FakeBackend(log),
+        audio_source=None, frame_source=None, env_camera=None,
+        agent_mode=_FakeAgentMode(), safety_gate=_FakeModeGuard(),
+        start_worker=False,
+        overrides={'head.enabled': False, 'head.gaze_follow': True})
+    node.log = log
+    node._on_scene(_scene(), at_s=0.0)
+    subject = _off_centre_person()
+    snapshot = SceneSnapshot(people=(subject,), subject=subject,
+                             mode=AddressingMode.INDIVIDUAL, at_s=1.0)
+    node._update_gaze(snapshot, image_width=640, at_s=1.0)
+    assert node.head.yaws == []
+    node.destroy_node()
+
+
+def test_gaze_follow_commands_nothing_when_gaze_follow_disabled():
+    log = _Recorder()
+    node = _conversation_node_class()(
+        face=_FakeFace(log), speech=_FakeSpeech(log),
+        gestures=_FakeGestures(log), head=_FakeHead(log),
+        transcriber=_FakeTranscriber(log), backend=_FakeBackend(log),
+        audio_source=None, frame_source=None, env_camera=None,
+        agent_mode=_FakeAgentMode(), safety_gate=_FakeModeGuard(),
+        start_worker=False,
+        overrides={'head.enabled': True, 'head.gaze_follow': False})
+    node.log = log
+    node._on_scene(_scene(), at_s=0.0)
+    subject = _off_centre_person()
+    snapshot = SceneSnapshot(people=(subject,), subject=subject,
+                             mode=AddressingMode.INDIVIDUAL, at_s=1.0)
+    node._update_gaze(snapshot, image_width=640, at_s=1.0)
+    assert node.head.yaws == []
+    node.destroy_node()
+
+
+def test_face_gets_a_non_default_spin_until():
+    from x2_greeter.ros.conversation_node import _face_spin_until
+    from x2_greeter.ros.face import _default_spin
+
+    log = _Recorder()
+    node = _conversation_node_class()(
+        speech=_FakeSpeech(log), gestures=_FakeGestures(log),
+        head=_FakeHead(log), transcriber=_FakeTranscriber(log),
+        backend=_FakeBackend(log), audio_source=None, frame_source=None,
+        env_camera=None, agent_mode=_FakeAgentMode(),
+        safety_gate=_FakeModeGuard(), start_worker=False)
+    node.log = log
+    assert node.face._spin is _face_spin_until, (
+        'Face is spinning via rclpy.spin_until_future_complete from the '
+        'worker thread -- exactly the re-entrant-executor call service_call.'
+        'wait_for_future exists to avoid')
+    assert node.face._spin is not _default_spin
+    node.destroy_node()
+
+
+def test_after_close_centres_the_head():
+    log = _Recorder()
+    node = _conversation_node_class()(
+        face=_FakeFace(log), speech=_FakeSpeech(log),
+        gestures=_FakeGestures(log), head=_FakeHead(log),
+        transcriber=_FakeTranscriber(log), backend=_FakeBackend(log),
+        audio_source=None, frame_source=None, env_camera=None,
+        agent_mode=_FakeAgentMode(), safety_gate=_FakeModeGuard(),
+        start_worker=False)
+    node.log = log
+    from x2_greeter.cognition.conversation import CloseReason
+
+    node._on_scene(_scene(), at_s=0.0)
+    node._greeting_finished(at_s=0.5)
+    node._close(CloseReason.SILENCE, at_s=20.0)
+    assert 'head.centre' in node.log.names(), (
+        'gaze-follow can leave the head off-centre; every exit path must '
+        'still centre it')
+    node.destroy_node()

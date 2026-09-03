@@ -53,9 +53,10 @@ from x2_greeter.core.detectors import build_detector
 from x2_greeter.core.faces import MODE_ONCE
 from x2_greeter.core.gestures import DEFAULT_ENABLED as DEFAULT_GESTURES
 from x2_greeter.core.gestures import GestureSelector
+from x2_greeter.core.gaze import group_drift, yaw_for
 from x2_greeter.core.imaging import to_jpeg_frame
 from x2_greeter.core.language import ALLOWED_LANGUAGES, LanguagePolicy
-from x2_greeter.core.scene import SceneConfig, observe
+from x2_greeter.core.scene import AddressingMode, SceneConfig, observe
 from x2_greeter.core.venue import load_venue
 from x2_greeter.ros.agent_mode import SERVICE as AGENT_MODE_SERVICE
 from x2_greeter.ros.agent_mode import AgentMode
@@ -71,6 +72,7 @@ from x2_greeter.ros.head import STATE_TOPIC as HEAD_STATE_TOPIC
 from x2_greeter.ros.head import Head
 from x2_greeter.ros.input_source import maybe_register
 from x2_greeter.ros.mode_guard import ModeGuard
+from x2_greeter.ros.service_call import DEFAULT_TIMEOUT_S, wait_for_future
 from x2_greeter.ros.speech import TTS_SERVICE, SpeechDispatcher
 
 # conversation.yaml pins this list to core.gestures.DEFAULT_ENABLED verbatim
@@ -103,6 +105,18 @@ def _as_jpeg_frame(frame):
     if isinstance(frame, np.ndarray):
         return to_jpeg_frame(frame)
     return frame
+
+
+def _face_spin_until(node, future, timeout_sec=None) -> None:
+    """Face's default spin_until calls rclpy.spin_until_future_complete, which
+    would re-enter the MultiThreadedExecutor already spinning this node --
+    Face.show()/show_thinking()/clear() are called from the worker thread
+    while that executor is running. Every other worker-thread adapter in
+    ros/ waits via service_call.wait_for_future instead (Event-based, no
+    re-entrant spin); Face is handed the same waiter here rather than
+    changing face.py itself (Task 11's file -- approved and untouched).
+    """
+    wait_for_future(future, timeout_sec if timeout_sec is not None else DEFAULT_TIMEOUT_S)
 
 
 class ConversationNode(Node):
@@ -288,6 +302,7 @@ class ConversationNode(Node):
     def _build_face(self) -> Face:
         return Face(self, service=self._p('face.service'),
                    enabled=bool(self._p('face.enabled')),
+                   spin_until=_face_spin_until,
                    callback_group=self._service_group)
 
     def _build_head(self) -> Head:
@@ -377,73 +392,131 @@ class ConversationNode(Node):
     # -- sensor callbacks (must not block) -----------------------------------
 
     def _on_frame(self, rgb, depth, at_s: float) -> None:
-        """A head-camera frame. Kept as the newest; used on the next turn."""
-        self._frame = rgb
-        if self._base_frame is None and not self._p('base_frame.use_env_camera'):
-            self._base_frame = rgb
+        """A head-camera frame. Kept as the newest; used on the next turn.
+
+        Called directly from frame_source.py's rclpy subscription callback
+        with no try/except of its own -- everything below must be guarded
+        end-to-end so nothing escapes into rclpy.
+        """
         try:
-            raws = self._detections(rgb)
-            snapshot = observe(raws, rgb.shape, depth,
-                               float(self._p('camera.depth_scale')),
-                               self._scene_config, at_s)
-        except Exception as exc:                       # noqa: BLE001 - one bad frame
-            self.get_logger().warning(
-                f'scene observation failed: {type(exc).__name__}: {exc}')
-            return
-        self._on_scene(snapshot, at_s)
-        self._greeting_finished(at_s)
+            self._frame = rgb
+            if self._base_frame is None and not self._p('base_frame.use_env_camera'):
+                self._base_frame = rgb
+            try:
+                raws = self._detections(rgb)
+                snapshot = observe(raws, rgb.shape, depth,
+                                   float(self._p('camera.depth_scale')),
+                                   self._scene_config, at_s)
+            except Exception as exc:                   # noqa: BLE001 - one bad frame
+                self.get_logger().warning(
+                    f'scene observation failed: {type(exc).__name__}: {exc}')
+                return
+            self._update_gaze(snapshot, int(rgb.shape[1]), at_s)
+            self._on_scene(snapshot, at_s)
+            if self.conversation.state is SessionState.GREETING:
+                self._greeting_finished(at_s)
+        except Exception as exc:                       # noqa: BLE001 - never escape into rclpy
+            self.get_logger().error(f'_on_frame failed: {type(exc).__name__}: {exc}')
 
     def _on_base_frame(self, image, at_s: float) -> None:
-        if self._base_frame is None:
-            self._base_frame = image
+        try:
+            if self._base_frame is None:
+                self._base_frame = image
+        except Exception as exc:                       # noqa: BLE001 - never escape into rclpy
+            self.get_logger().error(f'_on_base_frame failed: {type(exc).__name__}: {exc}')
 
     def _on_scene(self, snapshot, at_s: float) -> None:
-        self._scene = snapshot
-        if snapshot.subject is not None:
-            self._latest_reading = (at_s, snapshot.subject.distance_m)
-        with self._lock:
-            state = self.conversation.state
-            if state is SessionState.IDLE:
-                if (snapshot.person_count == 0
-                        or self.conversation.cooldown_active(at_s)):
+        try:
+            self._scene = snapshot
+            if snapshot.subject is not None:
+                self._latest_reading = (at_s, snapshot.subject.distance_m)
+            with self._lock:
+                state = self.conversation.state
+                if state is SessionState.IDLE:
+                    if (snapshot.person_count == 0
+                            or self.conversation.cooldown_active(at_s)):
+                        return
+                    self._child = snapshot.has_child
+                    opening = self.conversation.start(snapshot, at_s)
+                    language = self.conversation.language
+                else:
+                    self.conversation.observed(snapshot, at_s)
                     return
-                self._child = snapshot.has_child
-                opening = self.conversation.start(snapshot, at_s)
-                language = self.conversation.language
-            else:
-                self.conversation.observed(snapshot, at_s)
+            # Outside the lock: everything below talks to hardware.
+            if (self._p('base_frame.use_env_camera') and self.env_camera is not None
+                    and self._base_frame is None):
+                self.env_camera.capture_next()
+            if self._p('head.sweep_on_start'):
+                self.head.sweep()
+            self.speech.say(opening, language=language)
+        except Exception as exc:                       # noqa: BLE001 - never escape into rclpy
+            self.get_logger().error(f'_on_scene failed: {type(exc).__name__}: {exc}')
+
+    def _update_gaze(self, snapshot, image_width: int, at_s: float) -> None:
+        """head.gaze_follow: point the head at the person being addressed.
+
+        Gated on head.enabled AND head.gaze_follow (both ship false, so this
+        is inert by default -- see config/conversation.yaml). Addressing
+        *mode* is fixed for the session (cognition.conversation.Conversation
+        locks it once at start()), but the geometry tracks the live,
+        per-frame subject so a "follow" feature actually follows: INDIVIDUAL
+        centres the currently-detected subject's bounding box; GROUP uses a
+        slow sinusoidal drift instead of staring at one face. Never passes a
+        custom max_yaw_rad -- core.gaze.MAX_YAW_RAD (15 degrees) is the only
+        clamp used here.
+        """
+        if not (self._p('head.enabled') and self._p('head.gaze_follow')):
+            return
+        mode = self.conversation.mode
+        if mode is AddressingMode.INDIVIDUAL:
+            subject = snapshot.subject
+            if subject is None or subject.bbox is None:
                 return
-        # Outside the lock: everything below talks to hardware.
-        if (self._p('base_frame.use_env_camera') and self.env_camera is not None
-                and self._base_frame is None):
-            self.env_camera.capture_next()
-        if self._p('head.sweep_on_start'):
-            self.head.sweep()
-        self.speech.say(opening, language=language)
+            cx = (subject.bbox[0] + subject.bbox[2]) / 2.0
+            yaw = yaw_for(cx, image_width)
+        elif mode is AddressingMode.GROUP:
+            yaw = group_drift(at_s)
+        else:
+            return
+        self.head.look_at(yaw)
 
     def _greeting_finished(self, at_s: float) -> None:
         """The opening line has finished playing (a no-op outside GREETING)."""
-        with self._lock:
-            self.conversation.greeted(at_s)
+        try:
+            with self._lock:
+                self.conversation.greeted(at_s)
+        except Exception as exc:                       # noqa: BLE001 - never escape into rclpy
+            self.get_logger().error(f'_greeting_finished failed: {type(exc).__name__}: {exc}')
 
     def _on_utterance(self, pcm: bytes, at_s: float) -> None:
         """One VAD-segmented utterance. Handed off; never processed here."""
         try:
-            self._queue.get_nowait()          # discard the oldest, if any
-        except queue.Empty:
-            pass
-        try:
-            self._queue.put_nowait((pcm, at_s))
-        except queue.Full:                    # noqa: BLE001 - lost a race; fine
-            pass
+            try:
+                self._queue.get_nowait()      # discard the oldest, if any
+            except queue.Empty:
+                pass
+            try:
+                self._queue.put_nowait((pcm, at_s))
+            except queue.Full:                # noqa: BLE001 - lost a race; fine
+                pass
+        except Exception as exc:                       # noqa: BLE001 - never escape into rclpy
+            self.get_logger().error(f'_on_utterance failed: {type(exc).__name__}: {exc}')
 
-    def _on_tick(self) -> None:
-        at_s = self._now()
-        with self._lock:
-            self.conversation.tick(at_s)
-            closed = self.conversation.state is SessionState.COOLDOWN
-        if closed:
-            self._after_close()
+    def _on_tick(self, at_s: Optional[float] = None) -> None:
+        try:
+            at_s = self._now() if at_s is None else float(at_s)
+            just_closed = False
+            with self._lock:
+                if self.conversation.state is SessionState.COOLDOWN:
+                    if not self.conversation.cooldown_active(at_s):
+                        self.conversation.reset()
+                else:
+                    self.conversation.tick(at_s)
+                    just_closed = self.conversation.state is SessionState.COOLDOWN
+            if just_closed:
+                self._after_close()
+        except Exception as exc:                       # noqa: BLE001 - never escape into rclpy
+            self.get_logger().error(f'_on_tick failed: {type(exc).__name__}: {exc}')
 
     # -- the worker thread ----------------------------------------------------
 
@@ -525,6 +598,7 @@ class ConversationNode(Node):
 
     def _after_close(self) -> None:
         self.face.clear()
+        self.head.centre()
         self._base_frame = None
         self._child = False
 
