@@ -430,6 +430,8 @@ class ConversationNode(Node):
             self._scene = snapshot
             if snapshot.subject is not None:
                 self._latest_reading = (at_s, snapshot.subject.distance_m)
+            started = False
+            just_closed = False
             with self._lock:
                 state = self.conversation.state
                 if state is SessionState.IDLE:
@@ -439,9 +441,28 @@ class ConversationNode(Node):
                     self._child = snapshot.has_child
                     opening = self.conversation.start(snapshot, at_s)
                     language = self.conversation.language
+                    started = True
                 else:
+                    # observed() is not a passive observer: with an active
+                    # session and an empty room it calls
+                    # close(PERSON_GONE) synchronously and lands in
+                    # COOLDOWN. Somebody walking away is the dominant way a
+                    # public session ends, so this is the common route into
+                    # COOLDOWN, not a corner -- and without the edge check
+                    # below it is the only one that never runs the
+                    # post-close teardown (head centring, base-frame and
+                    # child-flag clearing, face clear). Edge-triggered and
+                    # flagged under the lock, exactly like _on_tick: the
+                    # lock is a plain threading.Lock and _after_close()
+                    # touches hardware, so it must run outside it.
                     self.conversation.observed(snapshot, at_s)
-                    return
+                    just_closed = (state is not SessionState.COOLDOWN
+                                   and self.conversation.state
+                                   is SessionState.COOLDOWN)
+            if not started:
+                if just_closed:
+                    self._after_close()
+                return
             # Outside the lock: everything below talks to hardware.
             if (self._p('base_frame.use_env_camera') and self.env_camera is not None
                     and self._base_frame is None):

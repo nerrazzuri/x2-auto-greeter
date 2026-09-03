@@ -610,3 +610,83 @@ def test_after_close_centres_the_head():
         'gaze-follow can leave the head off-centre; every exit path must '
         'still centre it')
     node.destroy_node()
+
+
+# -- Final review ------------------------------------------------------------
+#
+# BLOCKING 1: _on_scene's PERSON_GONE close skipped _after_close(). BLOCKING 2
+# (the clock seam) is tested in test_frame_source.py, where the seam is.
+
+
+def _empty_room(at_s=1.0):
+    return SceneSnapshot(people=(), subject=None, mode=AddressingMode.GROUP,
+                         at_s=at_s)
+
+
+def test_walking_away_runs_the_whole_post_close_teardown(node):
+    """The way a real public session actually ends: the person leaves.
+
+    _on_scene's non-IDLE branch calls Conversation.observed(), which is not
+    a passive observer -- with an active session and an empty room it calls
+    close(PERSON_GONE) synchronously and lands in COOLDOWN. That is the
+    fifth route into COOLDOWN and the only one that never ran
+    _after_close(). On the robot that leaves the head parked wherever
+    gaze-follow last tracked the person, the face still lit, the child-safety
+    flag set for whoever walks up next, and -- because _on_frame only latches
+    a base frame when there is none -- the frame captured at node startup
+    re-sent to the model for every visitor for the rest of the day.
+
+    Every other close test enters through _on_tick or the test-only
+    _close(). This one enters through _on_scene, which is the entrance the
+    hardware uses, and is why the defect survived every earlier review.
+    """
+    from x2_greeter.cognition.conversation import CloseReason
+
+    node._on_scene(_scene(_person(child=True)), at_s=0.0)
+    node._greeting_finished(at_s=0.5)
+    assert node.conversation.state is SessionState.LISTENING
+    node._base_frame = object()
+    assert node._child is True
+    node.log.calls.clear()
+
+    node._on_scene(_empty_room(1.0), at_s=1.0)
+
+    assert node.conversation.state is SessionState.COOLDOWN
+    assert node.conversation.close_reason is CloseReason.PERSON_GONE
+    names = node.log.names()
+    assert 'face.clear' in names, 'the face is left lit for the next visitor'
+    assert 'head.centre' in names, (
+        'head yaw must return to 0.0 on every exit path, and this is the '
+        'exit path a person walking away takes')
+    assert node._base_frame is None, (
+        'a stale base frame is re-sent to the model for every later visitor')
+    assert node._child is False, (
+        'the child-safety flag must not carry into the next session')
+
+
+def test_the_walk_away_teardown_is_edge_triggered(node):
+    """Frames keep arriving through the whole cooldown; the teardown runs
+    once, at the transition, not once per empty frame."""
+    node._on_scene(_scene(), at_s=0.0)
+    node._greeting_finished(at_s=0.5)
+    node.log.calls.clear()
+
+    node._on_scene(_empty_room(1.0), at_s=1.0)
+    assert node.conversation.state is SessionState.COOLDOWN
+    assert node.log.names().count('head.centre') == 1
+
+    for i in range(2, 6):
+        node._on_scene(_empty_room(float(i)), at_s=float(i))
+    assert node.log.names().count('head.centre') == 1
+    assert node.log.names().count('face.clear') == 1
+
+
+def test_walking_away_does_not_propagate_when_after_close_raises(node):
+    def _raise():
+        raise RuntimeError('boom')
+
+    node._on_scene(_scene(), at_s=0.0)
+    node._greeting_finished(at_s=0.5)
+    node.face.clear = _raise
+    node._on_scene(_empty_room(1.0), at_s=1.0)      # must not raise
+    assert node.conversation.state is SessionState.COOLDOWN
