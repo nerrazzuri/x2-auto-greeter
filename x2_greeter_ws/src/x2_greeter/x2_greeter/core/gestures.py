@@ -23,34 +23,51 @@ _HAND_PREFERENCE_AREAS = {
 }
 VALID_HAND_PREFERENCES = frozenset(_HAND_PREFERENCE_AREAS) | {'random'}
 
+VALID_SOURCES = frozenset({'enum', 'doc_table'})
+
 
 @dataclass(frozen=True)
 class GestureSpec:
     """One preset motion.
 
-    areas lists the control areas the docs permit, most-preferred first — so
+    areas lists the control areas the docs permit, most-preferred first -- so
     areas[0] is the fallback when a hand preference cannot be honoured.
     handed is True when the gesture has left/right variants and should follow
     gestures.hand_preference.
+
+    source names where the (motion_id, area) pair came from: 'enum' for the
+    McPresetMotion message, 'doc_table' for the interface docs' preset-motion
+    table. The vendor's two sources disagree and neither contains the other,
+    so an entry that does not say which one it came from cannot be checked.
+
+    hw_verified is True only when a human has watched a real robot perform
+    this exact pair. It is not a confidence rating.
     """
 
     name: str
     motion_id: int
     areas: tuple
     handed: bool
+    source: str
+    hw_verified: bool = False
 
 
-def _spec(name: str, motion_id: int, areas: tuple, handed: bool) -> GestureSpec:
-    return GestureSpec(name=name, motion_id=motion_id, areas=areas, handed=handed)
+def _spec(name: str, motion_id: int, areas: tuple, handed: bool,
+          source: str = 'enum', hw_verified: bool = False) -> GestureSpec:
+    if source not in VALID_SOURCES:
+        raise ValueError(f'gesture {name}: source must be one of '
+                         f'{sorted(VALID_SOURCES)}, got {source!r}')
+    return GestureSpec(name=name, motion_id=motion_id, areas=areas,
+                       handed=handed, source=source, hw_verified=hw_verified)
 
 
 CATALOGUE = {
-    # Every motion_id here is a member of the vendor's McPresetMotion enum.
-    # test_catalogue_ids_are_real_vendor_motions pins that against the SDK's
-    # own message, because three of these were once invented from a
-    # description and the controller silently refused them.
+    # Every motion_id here is a member of the vendor's McPresetMotion enum,
+    # or -- where noted -- of the interface doc's preset-motion table. See
+    # test/ros/test_gesture_catalogue_ids.py, which pins every (motion_id,
+    # area) pair against the source its spec names.
     # --- enabled by default: greetings ---
-    'wave': _spec('wave', 1002, (AREA_RIGHT, AREA_LEFT), True),
+    'wave': _spec('wave', 1002, (AREA_RIGHT, AREA_LEFT), True, hw_verified=True),
     'salute': _spec('salute', 1013, (AREA_RIGHT, AREA_LEFT), True),
     'handshake': _spec('handshake', 1003, (AREA_RIGHT, AREA_LEFT), True),
     'raise_hand': _spec('raise_hand', 1001, (AREA_RIGHT, AREA_LEFT), True),
@@ -62,7 +79,13 @@ CATALOGUE = {
     'wave_chest': _spec('wave_chest', 3010, (AREA_WHOLE_BODY,), False),
     'cheer': _spec('cheer', 3011, (AREA_WHOLE_BODY,), False),
     'blow_kiss': _spec('blow_kiss', 1004, (AREA_RIGHT, AREA_LEFT), True),
-    'heart': _spec('heart', 3004, (AREA_WHOLE_BODY,), False),
+    # 1007 is the two-handed chest heart. It is NOT in McPresetMotion -- the
+    # enum's heart is 3004, the overhead one below -- so its source is the
+    # doc table, and it takes area 3 only. Phase 1 shipped it handed=True,
+    # which with hand_preference: right sent a two-handed motion a one-handed
+    # area; the controller refused it and the refusal was mistaken for the id
+    # being invented.
+    'heart': _spec('heart', 1007, (AREA_BOTH,), False, source='doc_table'),
     # --- available but disabled by default (spec section 9) ---
     'hug': _spec('hug', 3008, (AREA_WHOLE_BODY,), False),
     'clap': _spec('clap', 3015, (AREA_WHOLE_BODY,), False),
@@ -72,6 +95,10 @@ CATALOGUE = {
     'peace': _spec('peace', 3003, (AREA_WHOLE_BODY,), False),
     'fist_bump': _spec('fist_bump', 1009, (AREA_RIGHT, AREA_LEFT), True),
     'turn_wave': _spec('turn_wave', 2001, (AREA_WHOLE_BODY,), False),
+    # The enum's INTERACTION_SWEATHEART: hands above the head. Area 11 is an
+    # inference from it being a whole-body motion, not a row anyone has read,
+    # which is exactly why this ships disabled.
+    'heart_overhead': _spec('heart_overhead', 3004, (AREA_WHOLE_BODY,), False),
 }
 
 DEFAULT_ENABLED = (

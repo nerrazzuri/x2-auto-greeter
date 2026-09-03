@@ -19,7 +19,7 @@ EXPECTED_ENABLED = {
 }
 EXPECTED_DISABLED = {
     'hug', 'clap', 'cross_arms', 'dynamic_light_wave',
-    'like', 'peace', 'fist_bump', 'turn_wave',
+    'like', 'peace', 'fist_bump', 'turn_wave', 'heart_overhead',
 }
 
 
@@ -35,10 +35,10 @@ def test_catalogue_also_carries_the_disabled_gestures():
 @pytest.mark.parametrize(('name', 'motion_id'), [
     ('wave', 1002), ('salute', 1013), ('handshake', 1003), ('raise_hand', 1001),
     ('raise_both', 1001), ('bow', 3001), ('high_five', 1008), ('wave_chest', 3010),
-    ('cheer', 3011), ('blow_kiss', 1004), ('heart', 3004),
+    ('cheer', 3011), ('blow_kiss', 1004), ('heart', 1007),
     ('hug', 3008), ('clap', 3015), ('cross_arms', 3009),
     ('dynamic_light_wave', 3007), ('like', 3002), ('peace', 3003),
-    ('fist_bump', 1009), ('turn_wave', 2001),
+    ('fist_bump', 1009), ('turn_wave', 2001), ('heart_overhead', 3004),
 ])
 def test_motion_ids_match_the_interface_docs(name, motion_id):
     assert CATALOGUE[name].motion_id == motion_id
@@ -63,15 +63,27 @@ def test_both_arm_gesture_ignores_the_hand_preference():
     assert resolve_area(CATALOGUE['raise_both'], 'left', rng) == AREA_BOTH
 
 
-def test_heart_is_a_whole_body_interaction_motion():
-    # 3004 is the vendor's INTERACTION_SWEATHEART, "heart above the head" --
-    # both arms, so the hand preference has nothing to choose between. It was
-    # previously catalogued as 1007 with per-hand areas; 1007 is not a member
-    # of McPresetMotion at all, and the controller refused every one.
+def test_heart_is_the_two_handed_chest_gesture():
+    # 1007 is the doc table's "heart gesture (both hands)", area 3. It is NOT
+    # a member of McPresetMotion -- the enum's heart is 3004, catalogued
+    # separately below as heart_overhead. Phase 1 shipped 1007 as handed=True,
+    # which with hand_preference: right sent the two-handed motion a
+    # one-handed area; the controller refused it and the refusal was mistaken
+    # for the id being invented.
     heart = CATALOGUE['heart']
     rng = random.Random(0)
     for preference in ('both', 'left', 'right'):
-        assert resolve_area(heart, preference, rng) == AREA_WHOLE_BODY
+        assert resolve_area(heart, preference, rng) == AREA_BOTH
+
+
+def test_heart_overhead_is_the_vendor_sweatheart_whole_body_motion():
+    # 3004 is McPresetMotion's INTERACTION_SWEATHEART, "heart above the head".
+    # It is catalogued but not enabled by default: the area is an inference
+    # from it being a whole-body motion, not a row anyone has read.
+    heart_overhead = CATALOGUE['heart_overhead']
+    rng = random.Random(0)
+    for preference in ('both', 'left', 'right'):
+        assert resolve_area(heart_overhead, preference, rng) == AREA_WHOLE_BODY
 
 
 def test_both_preference_on_a_single_arm_gesture_falls_back_to_the_first_area():
