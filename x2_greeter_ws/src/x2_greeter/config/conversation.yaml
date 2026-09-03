@@ -39,6 +39,10 @@
       # English default, following whoever is speaking. Malay is next phase.
       default: "en"
       switch_confidence: 0.7
+      # NOT READ AT RUNTIME. The node uses core/language.py's
+      # ALLOWED_LANGUAGES constant; this list records it so a drift between
+      # the two fails test_shipped_config.py instead of surprising somebody
+      # on site. Adding a language here does nothing until the code changes.
       allowed: ["en", "zh"]
 
     hearing:
@@ -58,6 +62,13 @@
       timeout_s: 6.0
 
     speech:
+      # NEITHER KEY IS READ AT RUNTIME. ros/speech.py (Phase 1 code, proven
+      # on this robot) hardcodes the service and its own timeout, and the
+      # node does not pass these through. They are recorded here because
+      # test_shipped_config.py pins the service name against the value in
+      # that module, so the pair cannot drift apart unnoticed -- but
+      # changing either one here has no effect. A wrong TTS service needs a
+      # code change and a rebuild, not a YAML edit.
       service: "/aimdk_5Fmsgs/srv/PlayTts"
       timeout_s: 10.0
 
