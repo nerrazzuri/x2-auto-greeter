@@ -46,9 +46,11 @@ need one the config does not name.
   If you are not certain which machine the current shell is on, stop and
   find out before running anything below.
 - **A human must be within reach of the stop control before any step below
-  that can produce motion.** This applies starting at step 4 (head) and
-  for every step after it; it is called out again there, but the rule
-  starts here.
+  that can produce motion.** The first of those is section 2 (gestures —
+  real arm motion), and the rule holds for every section from there on,
+  including the head sections 5-7. It is called out again at section 5
+  because that is where the head moves for the first time, but it starts
+  at section 2, not there.
 - Robot in `STAND_DEFAULT` (200). The node never changes the motion mode
   and refuses to gesture in any other one.
 - Remote controller powered on and in the operator's hands. It sits at

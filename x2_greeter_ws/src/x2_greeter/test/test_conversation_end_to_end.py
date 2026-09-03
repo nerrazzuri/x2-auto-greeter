@@ -3,8 +3,14 @@
 No ROS, no network, no Whisper model, no robot. The real state machine, the
 real validation, the real venue files and the real catalogues, driven by
 scripted fakes. This is the only place that can answer questions no single
-module can -- 'does a child in a mall atrium get through a whole
-conversation without being asked their name', for one.
+module can -- 'does a child session in a mall atrium survive a whole
+conversation with every turn passing validation', for one.
+
+What these tests do NOT cover: prompt composition. The driver below hands
+scripted replies straight to validate_turn, so nothing here would notice if
+CHILD_RULES stopped reaching the prompt. That wiring is guarded by
+test/cognition/test_claude_dialogue.py::test_child_mode_puts_the_child_rules_in_the_prompt,
+and that is the test to keep alive if this file is ever refactored.
 """
 from pathlib import Path
 
