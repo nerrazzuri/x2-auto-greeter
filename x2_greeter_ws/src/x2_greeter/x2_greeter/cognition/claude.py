@@ -20,7 +20,6 @@ from typing import Optional, Sequence
 
 import anthropic
 
-from x2_greeter.cognition.port import BackendUnavailable
 from x2_greeter.core.types import JpegFrame, SceneContext, Verdict
 
 from x2_greeter.cognition.dialogue import (
@@ -217,7 +216,7 @@ class ClaudeBackend:
         )
 
 
-def _extract_json(response) -> str:
+def _first_text_payload(response) -> str:
     """Return the text of the first text-type content block.
 
     Same approach as ClaudeBackend._extract_json above -- adaptive thinking
@@ -330,7 +329,7 @@ class ClaudeDialogueBackend:
             raise self._unavailable('unexpected failure', exc)
 
         try:
-            doc = json.loads(_extract_json(response))
+            doc = json.loads(_first_text_payload(response))
         except Exception as exc:                  # noqa: BLE001
             raise self._unavailable('response was not usable JSON', exc)
 
