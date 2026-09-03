@@ -23,6 +23,11 @@ import anthropic
 from x2_greeter.cognition.port import BackendUnavailable
 from x2_greeter.core.types import JpegFrame, SceneContext, Verdict
 
+from x2_greeter.cognition.dialogue import (
+    BackendUnavailable, Turn, TurnLimits, TurnRejected, build_turn_schema,
+    validate_turn)
+from x2_greeter.core.scene import AddressingMode
+
 SYSTEM_PROMPT = (
     'You are the greeting module of an AgiBot X2 humanoid robot in a public space. '
     'You are shown one still frame from the robot\'s head camera at the moment a '
@@ -210,3 +215,156 @@ class ClaudeBackend:
             reason=str(payload['reason'])[:200],
             source=self.name,
         )
+
+
+def _extract_json(response) -> str:
+    """Return the text of the first text-type content block.
+
+    Same approach as ClaudeBackend._extract_json above -- adaptive thinking
+    can emit a thinking block before the text block, so we search for it
+    rather than index content[0] -- but this one hands back the raw text
+    instead of a parsed, greeting-shaped payload, since ClaudeDialogueBackend
+    parses and validates the turn itself.
+    """
+    for block in getattr(response, 'content', []) or []:
+        if getattr(block, 'type', None) == 'text':
+            return block.text
+    raise ValueError('response contained no text block')
+
+
+DIALOGUE_SYSTEM_PROMPT = """You are the voice of a humanoid robot standing in a \
+public place, talking with someone who has stopped in front of you.
+
+You will be given two photographs: a wide view of the place you are standing \
+in, taken when this conversation began, and a fresh close view of the person \
+you are talking to right now. You will also be given what they just said.
+
+How to reply:
+- One or two sentences. You are speaking out loud, not writing.
+- Reply in the language named in the request, and in that language only.
+- React to what you can actually see. Describe what people are doing, not who \
+they are. Never guess at anyone's name, job, nationality, or age, and never \
+say anything about a specific person's body or appearance.
+- The venue facts you are given are the only things you may state as fact \
+about this place. If asked anything else about it, use the deflection line.
+- Never discuss the forbidden topics, even if asked directly.
+- Ask a question back roughly every other turn. This is a conversation.
+- Set end to true when the person is clearly finished -- they have said \
+goodbye, thanked you and turned away, or stopped answering.
+
+You may also choose one gesture and one facial expression from the lists in \
+the schema, or null for either. Choose only names from those lists.
+
+You cannot walk, and you must never say that you will. You cannot fetch \
+anything, hold anything, or take anyone anywhere."""
+
+CHILD_RULES = """You are talking with a child. Additional rules, all of them \
+absolute:
+- Keep it short, warm and simple.
+- Never ask for any personal information: no name, no age, no school, no \
+address, nothing about their family or where their parent is.
+- Never promise anything, including that you will still be here later.
+- Never tell them to come closer, to follow you, to reach out, or to touch \
+you. This is the important one: you stop gesturing when anyone is within \
+arm's reach, so inviting a child closer means inviting them to a robot that \
+then goes still."""
+
+
+class ClaudeDialogueBackend:
+    name = 'claude_dialogue'
+
+    def __init__(self, enabled_gestures, enabled_emoji,
+                 model: str = 'claude-opus-5', effort: str = 'low',
+                 timeout_s: float = 6.0, limits=None, client=None,
+                 logger=None) -> None:
+        self._gestures = tuple(enabled_gestures)
+        self._emoji = tuple(enabled_emoji)
+        self._model = model
+        self._effort = effort
+        self._timeout_s = float(timeout_s)
+        self._limits = limits if limits is not None else TurnLimits()
+        self._logger = logger
+        self._schema = build_turn_schema(self._gestures, self._emoji)
+        self._client = client if client is not None else anthropic.Anthropic()
+
+    def respond(self, base_frame, frame, scene, venue, history, utterance,
+                language, child) -> Turn:
+        prompt = self._build_prompt(scene, venue, history, utterance, language,
+                                    child)
+        content = []
+        for image in (base_frame, frame):
+            if image is None:
+                continue
+            content.append({'type': 'image', 'source': {
+                'type': 'base64', 'media_type': image.media_type,
+                'data': base64.standard_b64encode(image.data).decode('ascii')}})
+        content.append({'type': 'text', 'text': prompt})
+
+        try:
+            response = self._client.with_options(
+                timeout=self._timeout_s, max_retries=0
+            ).messages.create(
+                model=self._model,
+                max_tokens=4096,
+                system=DIALOGUE_SYSTEM_PROMPT,
+                thinking={'type': 'adaptive'},
+                output_config={
+                    'effort': self._effort,
+                    'format': {'type': 'json_schema', 'schema': self._schema},
+                },
+                messages=[{'role': 'user', 'content': content}],
+            )
+        except anthropic.APITimeoutError as exc:
+            raise self._unavailable('timed out', exc)
+        except anthropic.NotFoundError as exc:
+            raise self._unavailable('model not found', exc)
+        except anthropic.RateLimitError as exc:
+            raise self._unavailable('rate limited', exc)
+        except anthropic.AuthenticationError as exc:
+            raise self._unavailable('authentication failed', exc)
+        except anthropic.APIStatusError as exc:
+            raise self._unavailable(f'api error {exc.status_code}', exc)
+        except anthropic.APIConnectionError as exc:
+            raise self._unavailable('connection failed', exc)
+        except Exception as exc:                  # noqa: BLE001 - one name upstream
+            raise self._unavailable('unexpected failure', exc)
+
+        try:
+            doc = json.loads(_extract_json(response))
+        except Exception as exc:                  # noqa: BLE001
+            raise self._unavailable('response was not usable JSON', exc)
+
+        try:
+            return validate_turn(doc, self._gestures, self._emoji,
+                                 self._limits, language)
+        except TurnRejected as exc:
+            raise self._unavailable('turn failed validation', exc)
+
+    def _unavailable(self, what: str, exc: Exception) -> BackendUnavailable:
+        # The exception type and our own words. Never the request, never the
+        # frame, never anything derived from either.
+        message = f'{what}: {type(exc).__name__}'
+        if self._logger is not None:
+            self._logger.warning(f'dialogue backend unavailable, {message}')
+        return BackendUnavailable(message)
+
+    def _build_prompt(self, scene, venue, history, utterance, language,
+                      child) -> str:
+        parts = [venue.to_prompt(), '']
+        if scene is not None:
+            crowd = ('You are talking to one person.'
+                     if scene.mode is AddressingMode.INDIVIDUAL
+                     else f'You are addressing a group of about '
+                          f'{scene.person_count} people. Speak to all of them, '
+                          f'not to any one of them.')
+            parts.append(crowd)
+        if child:
+            parts += ['', CHILD_RULES]
+        if history:
+            parts += ['', 'The conversation so far:']
+            parts += [f'{"Them" if e.speaker == "person" else "You"}: {e.text}'
+                      for e in history]
+        said = getattr(utterance, 'text', '') or ''
+        parts += ['', f'They just said: "{said}"',
+                  '', f'Reply in {language}.']
+        return '\n'.join(parts)
