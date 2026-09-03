@@ -90,8 +90,28 @@ class FrameSource:
         if self._rotate_180:
             bgr = rotate_180(bgr)
 
+        # Two clocks, deliberately kept apart.
+        #
+        # `stamp` is the *publisher's* clock. It is used only to pair this
+        # RGB frame with a depth frame below -- a camera stamp compared
+        # against a camera stamp, which is internally consistent whatever
+        # machine the camera is on.
+        #
+        # `now` is this node's clock, and it is the only value that crosses
+        # the boundary to the consumer. Everything downstream (the
+        # arm's-reach staleness window, the silence timeout, the session
+        # cap) compares the timestamp it is handed here against
+        # node.get_clock(). The camera publisher is not guaranteed to be on
+        # this machine or this clock, and nothing asserts a common time
+        # source -- so handing on the header stamp would make a lagging
+        # camera refuse every gesture for a whole demo, and a leading one
+        # make the staleness check unfireable, letting an arbitrarily old
+        # distance reading satisfy the 1.0 m interlock. ros/greeting_node.py
+        # discards the header stamp for exactly this reason; this is the
+        # same decision, made once at the seam.
         stamp = _stamp_seconds(msg)
-        self._last_rgb_at = self._now()
+        now = self._now()
+        self._last_rgb_at = now
         self._warned_stale = False
 
         depth = self._latest_depth
@@ -101,7 +121,7 @@ class FrameSource:
             return
 
         self._frames_seen += 1
-        self._on_frame(bgr, depth, stamp)
+        self._on_frame(bgr, depth, now)
 
     def _check_stale(self) -> None:
         if self._last_rgb_at is None:

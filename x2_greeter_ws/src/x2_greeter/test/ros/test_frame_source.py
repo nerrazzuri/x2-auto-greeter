@@ -230,3 +230,97 @@ def test_rotate_180_turns_rgb_and_depth_together(ros):
         consumer.destroy_node()
         publisher.destroy_node()
         thread.join(timeout=5.0)
+
+
+# ------------------------------------------------- whose clock crosses the seam
+
+def test_the_timestamp_handed_on_is_the_node_clock_not_the_camera_stamp(ros):
+    """BLOCKING 2 from the final review.
+
+    The camera publisher is not guaranteed to be on this machine or on this
+    clock -- PC1/PC2/PC3 are three computers and nothing on this branch
+    asserts a common time source. Everything downstream of this callback
+    compares the timestamp it is handed against node.get_clock(): the
+    arm's-reach staleness window (safety.stale_distance_s: 1.0), the silence
+    timeout, the session cap. So the value crossing this boundary must be
+    the node clock, exactly as ros/greeting_node.py decided in Phase 1.
+
+    Hand on the header stamp instead and a camera clock lagging by a second
+    refuses every gesture for the whole demo with only a log line, while one
+    that leads makes (now - reading) negative -- the staleness check can
+    never fire, and an arbitrarily old distance reading passes as fresh into
+    the 1.0 m floor that protects a child standing in front of the robot.
+
+    The 30 s offset is applied to the RGB and depth stamps together, so the
+    RGB/depth sync-skew check -- which compares a camera stamp against a
+    camera stamp and is right to -- still pairs them. If that check were
+    also switched to the node clock the pair would be dropped and this test
+    would fail on 'no frame delivered'.
+    """
+    from cv_bridge import CvBridge
+    from rclpy.executors import MultiThreadedExecutor
+    from rclpy.qos import qos_profile_sensor_data
+    from sensor_msgs.msg import Image
+
+    from x2_greeter.ros.frame_source import FrameSource
+
+    OFFSET_S = 30.0
+    RGB_TOPIC, DEPTH_TOPIC = '/test/clock/rgb', '/test/clock/depth'
+    bridge = CvBridge()
+    bgr = np.zeros((8, 10, 3), dtype=np.uint8)
+    depth = np.full((8, 10), 1500, dtype=np.uint16)
+
+    publisher = ros.create_node('clock_publisher')
+    rgb_pub = publisher.create_publisher(Image, RGB_TOPIC, qos_profile_sensor_data)
+    depth_pub = publisher.create_publisher(Image, DEPTH_TOPIC, qos_profile_sensor_data)
+
+    consumer = ros.create_node('clock_consumer')
+    got = []
+    arrived = threading.Event()
+    header_stamps = []
+
+    def on_frame(b, d, at_s):
+        got.append(at_s)
+        arrived.set()
+
+    source = FrameSource(consumer, RGB_TOPIC, DEPTH_TOPIC, on_frame)
+
+    def publish():
+        from builtin_interfaces.msg import Time
+
+        seconds = publisher.get_clock().now().nanoseconds * 1e-9 + OFFSET_S
+        stamp = Time(sec=int(seconds), nanosec=int((seconds % 1.0) * 1e9))
+        header_stamps.append(stamp.sec + stamp.nanosec * 1e-9)
+        rgb_msg = bridge.cv2_to_imgmsg(bgr, encoding='bgr8')
+        depth_msg = bridge.cv2_to_imgmsg(depth, encoding='16UC1')
+        for msg in (rgb_msg, depth_msg):
+            msg.header.stamp = stamp
+        depth_pub.publish(depth_msg)   # depth first: it is cached, not synced
+        rgb_pub.publish(rgb_msg)
+
+    publisher.create_timer(0.1, publish)
+
+    executor = MultiThreadedExecutor()
+    executor.add_node(publisher)
+    executor.add_node(consumer)
+    thread = threading.Thread(target=executor.spin, daemon=True)
+    thread.start()
+    try:
+        assert arrived.wait(15.0), 'no frame delivered'
+        at_s = got[0]
+        node_now = consumer.get_clock().now().nanoseconds * 1e-9
+        camera_stamp = header_stamps[0]
+
+        assert abs(at_s - node_now) < 5.0, (
+            f'at_s ({at_s}) is not on the node clock ({node_now}); the '
+            'gesture staleness window and the silence timeout both compare '
+            'it against exactly this clock')
+        assert abs(at_s - camera_stamp) > OFFSET_S / 2.0, (
+            f'at_s ({at_s}) is tracking the publisher header stamp '
+            f'({camera_stamp}) -- the whole of BLOCKING 2')
+    finally:
+        executor.shutdown()
+        source.destroy()
+        consumer.destroy_node()
+        publisher.destroy_node()
+        thread.join(timeout=5.0)
