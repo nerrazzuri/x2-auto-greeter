@@ -1,0 +1,123 @@
+# The conversational interaction node.
+#
+# Every hardware-gated feature below ships disabled. None of them has run on
+# this robot under our code, and each one is a one-line edit away from being
+# on. Tune on site, with a human within reach of the stop control.
+#
+# Anything with a test in test/test_shipped_config.py is pinned deliberately.
+# Widening one of those means changing the test too, which means somebody
+# reads the reason before the robot does.
+/**:
+  ros__parameters:
+
+    venue:
+      # A file under config/venues/, without the .yaml.
+      profile: "clothing_store"
+
+    presence:
+      confidence_min: 0.5
+      # Anyone inside this is addressed individually; a room where everyone
+      # is further away is addressed as a group. Locked at session start.
+      individual_max_m: 2.0
+      # How far out the robot reads the room. Deliberately wider than the
+      # 3.0 m Phase 1 greeting trigger: seeing the six people behind the one
+      # in front is the point.
+      scene_max_m: 5.0
+      child_stature_max_m: 1.35
+
+    conversation:
+      max_turns: 8
+      silence_timeout_s: 8.0
+      # The promise that the robot lets go, not a resource limit.
+      session_max_s: 180.0
+      cooldown_s: 20.0
+      backend_failures_max: 2
+      history_max: 12
+      reply_max_chars: 200
+
+    language:
+      # English default, following whoever is speaking. Malay is next phase.
+      default: "en"
+      switch_confidence: 0.7
+      allowed: ["en", "zh"]
+
+    hearing:
+      enabled: true
+      topic: "/agent/process_audio_output"
+      max_utterance_s: 15.0
+      # faster-whisper, local on PC2. No new vendor, no audio leaving the robot.
+      model_size: "small"
+      device: "auto"
+      compute_type: "int8"
+
+    dialogue:
+      model: "claude-opus-5"
+      effort: "low"
+      # Must stay under conversation.silence_timeout_s: a backend still
+      # thinking when the silence timer fires would close its own session.
+      timeout_s: 6.0
+
+    speech:
+      service: "/aimdk_5Fmsgs/srv/PlayTts"
+      timeout_s: 10.0
+
+    gestures:
+      enabled:
+        - "wave"
+        - "salute"
+        - "handshake"
+        - "raise_hand"
+        - "raise_both"
+        - "bow"
+        - "high_five"
+        - "wave_chest"
+        - "cheer"
+        - "blow_kiss"
+        - "heart"
+      hand_preference: "right"
+
+    face:
+      # OFF. Never run on hardware.
+      enabled: false
+      service: "/aimdk_5Fmsgs/srv/PlayEmoji"
+      enabled_expressions:
+        - "thinking"
+        - "calm"
+        - "blink"
+        - "happy"
+        - "very_happy"
+        - "cute"
+        - "confused"
+        - "sympathy"
+
+    head:
+      # OFF. Never run on hardware. Yaw only, and clamped to 0.262 rad in
+      # two places before it reaches a motor.
+      enabled: false
+      sweep_on_start: false
+      gaze_follow: false
+      command_topic: "/aima/hal/joint/head/command"
+      state_topic: "/aima/hal/joint/head/state"
+      rate_hz: 20.0
+
+    base_frame:
+      # OFF. The wide 156-degree view of the room. Until this is on, the
+      # base frame is a head-camera frame captured at session start, which
+      # works and simply sees less.
+      use_env_camera: false
+      # Confirm the real front-stereo topic on site before flipping the flag
+      # above:
+      #   ros2 topic list | grep -i -E 'stereo|front|fisheye'
+      rgb_topic: "/aima/hal/sensor/stereo_head_front_left/rgb_image"
+      rotate_180: false
+
+    safety:
+      require_stand_default: true
+      gesture_min_distance_m: 1.0
+      stale_distance_s: 1.0
+
+    mc_input:
+      name: "x2_greeter"
+      # Inside the documented SDK band 20-39. The remote controller stays at
+      # 80 and keeps its override.
+      priority: 30
