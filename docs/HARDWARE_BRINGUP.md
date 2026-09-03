@@ -33,6 +33,18 @@ need one the config does not name.
 
 ## 0. Before anything moves
 
+- **Which computer you are on.** The robot has three compute units:
+  - **PC1 (10.0.1.40) — motion control. Never build or run this package
+    there.** The AgiBot SDK documentation states this "strictly prohibited
+    to avoid safety risks," and that rule is absolute, not specific to this
+    package.
+  - **PC2 (10.0.1.41) — development.** This is where you build and launch
+    the node, and where `faster-whisper` runs locally (`docs/DEPLOYMENT.md`
+    Phase 2, section 1). Every command in this document — including the
+    `ros2 launch` command in section 1 — is meant to be run from PC2.
+  - **PC3 (10.0.1.42) — interaction.**
+  If you are not certain which machine the current shell is on, stop and
+  find out before running anything below.
 - **A human must be within reach of the stop control before any step below
   that can produce motion.** This applies starting at step 4 (head) and
   for every step after it; it is called out again there, but the rule
