@@ -33,6 +33,22 @@ need one the config does not name.
 
 ## 0. Before anything moves
 
+- **Never run the Phase 1 greeter node and this node at the same time.**
+  This is not "they will compete and one will win." Both
+  `config/greeter.yaml` and `config/conversation.yaml` register an MC input
+  source under the *same name*, `x2_greeter`, at priority 30 — and the
+  vendor can reject the second registration outright on the name, so the
+  node that started second may end up unable to gesture at all, with
+  nothing wrong-looking in its startup log. They also both hold audio
+  focus. If somebody relaunches the Phase 1 greeter "just to compare",
+  stop this node first. Before launching, check nothing is already up:
+
+  ```bash
+  ros2 node list | grep -E 'x2_greeter|x2_conversation'
+  ```
+
+  Expect no output. If `x2_greeter` (the Phase 1 greeting node) is listed,
+  shut it down and confirm it is gone before continuing.
 - **Which computer you are on.** The robot has three compute units:
   - **PC1 (10.0.1.40) — motion control. Never build or run this package
     there.** The AgiBot SDK documentation states this "strictly prohibited
@@ -71,8 +87,11 @@ need one the config does not name.
 Launch as shipped:
 
 ```bash
-ros2 launch x2_greeter conversation.launch.py venue:=clothing_store
+ros2 launch x2_greeter conversation.launch.py
 ```
+
+With no `venue:=` argument the venue comes from `venue.profile` in
+`config/conversation.yaml` — see section 8.
 
 Speak to the robot. You are checking three things:
 - it answers, in the language you spoke;
@@ -180,6 +199,15 @@ today) is where the robot's knowledge of a place lives: facts it may
 state, topics to encourage, topics never to touch, and the line it uses to
 hand a question to a human. Editing these needs no rebuild with
 `--symlink-install`, only a relaunch.
+
+Which one is in use is `venue.profile` in `config/conversation.yaml`. That
+file is the authority: launch with no `venue:=` argument and the value in
+the YAML is what the robot uses. `venue:=mall_atrium` is an override for a
+one-off launch and beats the file for that run only —
+
+```bash
+ros2 launch x2_greeter conversation.launch.py venue:=mall_atrium
+```
 
 ## Known issue: the docker/CI baseline
 

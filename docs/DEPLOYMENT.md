@@ -171,13 +171,19 @@ export ANTHROPIC_API_KEY=...
 ### 3. Launching
 
 ```bash
-ros2 launch x2_greeter conversation.launch.py venue:=clothing_store
+ros2 launch x2_greeter conversation.launch.py
 ```
 
+The venue comes from `venue.profile` in `config/conversation.yaml`. Pass
+`venue:=mall_atrium` only to override the file for a single launch.
+
 **The Phase 1 greeter and this node must not run at the same time.** Both
-register as an MC input source at priority 30, both try to gesture, and
-both hold audio focus — running them together is a fight over the same
-resources, not two features working side by side.
+register as an MC input source *under the same name*, `x2_greeter`, at
+priority 30 — so this is a name collision, not only priority contention:
+the vendor can reject the second registration outright, leaving the node
+that started second unable to gesture with nothing obviously wrong in its
+log. Both also try to gesture and both hold audio focus. Check with
+`ros2 node list | grep -E 'x2_greeter|x2_conversation'` before launching.
 
 ### 4. What ships off
 
