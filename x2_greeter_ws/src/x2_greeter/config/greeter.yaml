@@ -37,6 +37,18 @@
       reject_cooldown_s: 5.0
       confirm_timeout_s: 10.0
 
+    interaction:
+      # The X2 runs its own interaction system on the same speaker. While that
+      # is talking to somebody, the greeter stays quiet: cutting across an
+      # answer the person was waiting for is worse than not greeting at all.
+      respect_busy: true
+      tts_status_topic: /interaction/tts_status
+      play_state_topic: /aima/hal/audio/play_state
+      # Both topics are event-driven, so a missed end-of-speech would mute the
+      # greeter for good. Busy expires this long after the message that set
+      # it, with a warning.
+      busy_timeout_s: 15.0
+
     mc_input:
       # The controller discards motion commands from unregistered sources
       # (SDK docs 5.1.3). Priority must stay in the documented SDK band 20-39:

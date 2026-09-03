@@ -31,6 +31,7 @@ from x2_greeter.core.types import SceneContext
 from x2_greeter.ros.frame_source import FrameSource
 from x2_greeter.ros.gesture import GestureDispatcher
 from x2_greeter.ros.input_source import maybe_register
+from x2_greeter.ros.interaction_guard import InteractionGuard
 from x2_greeter.ros.mode_guard import ModeGuard
 from x2_greeter.ros.speech import SpeechDispatcher
 
@@ -133,6 +134,18 @@ class GreetingNode(Node):
             timeout_ms=int(self._param('mc_input.timeout_ms')),
             callback_group=self._callback_group)
 
+        # The robot's own interaction system owns the same speaker. Greeting
+        # over a conversation in progress is worse than not greeting at all.
+        self.interaction = None
+        if bool(self._param('interaction.respect_busy')):
+            self.interaction = InteractionGuard(
+                self,
+                own_domain=self._param('speech.domain'),
+                tts_status_topic=self._param('interaction.tts_status_topic'),
+                play_state_topic=self._param('interaction.play_state_topic'),
+                busy_timeout_s=float(self._param('interaction.busy_timeout_s')),
+                callback_group=self._callback_group)
+
         self.gesture = GestureDispatcher(self, callback_group=self._callback_group)
         self.mode_guard = ModeGuard(
             self, require_stand_default=bool(self._param('safety.require_stand_default')),
@@ -182,6 +195,13 @@ class GreetingNode(Node):
         self.declare_parameter('presence.cooldown_s', 30.0)
         self.declare_parameter('presence.reject_cooldown_s', 5.0)
         self.declare_parameter('presence.confirm_timeout_s', 10.0)
+
+        self.declare_parameter('interaction.respect_busy', True)
+        self.declare_parameter('interaction.tts_status_topic',
+                               '/interaction/tts_status')
+        self.declare_parameter('interaction.play_state_topic',
+                               '/aima/hal/audio/play_state')
+        self.declare_parameter('interaction.busy_timeout_s', 15.0)
 
         self.declare_parameter('mc_input.enabled', True)
         self.declare_parameter('mc_input.name', 'x2_greeter')
@@ -289,6 +309,14 @@ class GreetingNode(Node):
         if self._greeting_future is not None and not self._greeting_future.done():
             self.get_logger().warning('greeting worker still busy; skipping this confirm')
             return
+
+        # Not while the robot is mid-conversation. The tracker keeps the
+        # person; the confirm timeout releases it if this keeps being true.
+        if self.interaction is not None:
+            reason = self.interaction.busy_reason()
+            if reason is not None:
+                self.get_logger().info(f'not greeting: {reason}')
+                return
 
         try:
             frame = to_jpeg_frame(bgr) if self._needs_frame else None
