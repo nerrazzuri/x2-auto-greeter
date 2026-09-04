@@ -74,11 +74,19 @@ def test_it_refuses_to_speak_nothing(rig):
     assert robot.tts_requests == []
 
 
-def test_auto_demotes_to_audio_files_when_tts_reports_failure(rig):
+def test_auto_demotes_to_audio_files_after_repeated_tts_failure(rig):
     robot, caller = rig
     robot.tts_succeeds = False
     speech = dispatcher(caller, tier='auto', audio_dir='/var/tmp/x2_greeter_audio',
-                        audio_file_count=6)
+                        audio_file_count=6, tts_failures_before_demotion=3)
+
+    # The first two failures are not evidence -- see speak()'s comment. They
+    # report failure honestly and stay on TTS.
+    assert speech.speak('Hello there!') is False
+    assert speech.speak('Hello there!') is False
+    assert speech.demoted is False
+    assert robot.audio_requests == []
+
     assert speech.speak('Hello there!') is True     # succeeded via the audio file
     assert speech.demoted is True
     assert speech.using_tts is False
@@ -88,11 +96,12 @@ def test_auto_demotes_to_audio_files_when_tts_reports_failure(rig):
 def test_demotion_is_one_way_within_a_session(rig):
     robot, caller = rig
     robot.tts_succeeds = False
-    speech = dispatcher(caller, tier='auto')
-    speech.speak('first')
+    speech = dispatcher(caller, tier='auto', tts_failures_before_demotion=3)
+    for _ in range(3):                               # the third one demotes
+        speech.speak('first')
     robot.tts_succeeds = True                        # TTS recovers
     speech.speak('second')
-    assert len(robot.tts_requests) == 1              # never tried again
+    assert len(robot.tts_requests) == 3              # never tried again after demotion
     assert len(robot.audio_requests) == 2
 
 
@@ -320,17 +329,30 @@ def test_it_reports_failure_when_the_audio_service_is_absent(ros):
         thread.join(timeout=5.0)
 
 
-def test_the_greeting_claims_no_conversation_trace(rig):
-    """trace_id ties an utterance to a dialogue turn. The greeter has no
-    dialogue, and on hardware a literal trace_id was minted into a session the
-    interaction system then tracked as its own -- after which the robot stopped
-    listening to the person in front of it.
+def test_the_greeting_sends_the_vendor_default_trace_id(rig):
+    """This test used to require an empty trace_id, on the theory that a
+    literal one was minted into an interaction session the vendor then
+    tracked as its own -- which was offered as the explanation for the robot
+    answering once after a greeting and then going quiet.
+
+    That theory was tested on hardware and did not hold. The X2's interaction
+    system opens a session on its wake word and on nothing else; no field we
+    put in a PlayTts request opens or closes one, which is why every greeting
+    now ends by telling the person the wake word (core/invitation.py). The
+    change was made as part of a bundle that also lowered priority_level, and
+    that bundle produced `priority_rejected` and an entire session of silent
+    greetings.
+
+    So the dispatcher sends what the vendor's own client sends. The value is
+    asserted here because it goes out over a wire to somebody else's service:
+    if it is ever emptied again, it should be for a reason somebody wrote
+    down, not by drift.
     """
     robot, caller = rig
     dispatcher(caller, domain='x2_greeter', priority_level=6).speak('Hi')
 
     assert robot.tts_requests, 'no TTS request was sent'
-    assert robot.tts_requests[0].tts_req.trace_id == ''
+    assert robot.tts_requests[0].tts_req.trace_id == 'x2_greeter'
 
 
 # ------------------------------------------- demotion needs more than one failure
