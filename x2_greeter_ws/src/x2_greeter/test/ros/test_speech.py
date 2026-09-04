@@ -96,10 +96,14 @@ def test_demotion_is_one_way_within_a_session(rig):
     assert len(robot.audio_requests) == 2
 
 
+#: Any value: the point is that the dispatcher sends the one it was given.
+AUDIO_TEST_PRIORITY = 6
+
+
 def test_the_audio_request_matches_the_documented_format(rig):
     robot, caller = rig
     speech = dispatcher(caller, tier='audio_file', audio_dir='/var/tmp/x2_greeter_audio',
-                        audio_file_count=6)
+                        audio_file_count=6, priority_level=AUDIO_TEST_PRIORITY)
     assert speech.speak('ignored, a recording is played instead') is True
     audio = robot.audio_requests[0].file
     assert audio.pkg_name == 'x2_greeter'
@@ -111,7 +115,11 @@ def test_the_audio_request_matches_the_documented_format(rig):
     assert audio.info.sample_rate == 16000
     assert audio.info.sample_format == 'S16_LE'
     assert audio.info.coding_format == 'wave'
-    assert audio.priority == 6
+    # The dispatcher's priority, not a literal: this file already went red
+    # once for the shipped priority changing rather than for anything being
+    # wrong, which teaches people to edit the test instead of the thing it
+    # guards.
+    assert audio.priority == AUDIO_TEST_PRIORITY
 
 
 def test_audio_file_tier_never_calls_tts(rig):
@@ -310,3 +318,56 @@ def test_it_reports_failure_when_the_audio_service_is_absent(ros):
         executor.shutdown()
         caller.destroy_node()
         thread.join(timeout=5.0)
+
+
+def test_the_greeting_claims_no_conversation_trace(rig):
+    """trace_id ties an utterance to a dialogue turn. The greeter has no
+    dialogue, and on hardware a literal trace_id was minted into a session the
+    interaction system then tracked as its own -- after which the robot stopped
+    listening to the person in front of it.
+    """
+    robot, caller = rig
+    dispatcher(caller, domain='x2_greeter', priority_level=6).speak('Hi')
+
+    assert robot.tts_requests, 'no TTS request was sent'
+    assert robot.tts_requests[0].tts_req.trace_id == ''
+
+
+# ------------------------------------------- demotion needs more than one failure
+
+def test_a_single_tts_failure_does_not_demote(rig):
+    """One failure means very little here: cross-host responses are routinely
+    dropped, and priority_rejected is about one request, not about TTS."""
+    robot, caller = rig
+    robot.tts_succeeds = False
+    speech = dispatcher(caller, tier='auto', tts_failures_before_demotion=3)
+
+    assert speech.speak('one') is False
+    assert speech._using_tts is True, 'demoted after a single failure'
+    assert robot.audio_requests == [], 'fell back to recordings after one failure'
+
+
+def test_demotion_happens_after_the_configured_run_of_failures(rig):
+    robot, caller = rig
+    robot.tts_succeeds = False
+    speech = dispatcher(caller, tier='auto', tts_failures_before_demotion=3)
+
+    speech.speak('one'); speech.speak('two')
+    assert speech._using_tts is True
+    speech.speak('three')
+    assert speech._using_tts is False, 'never demoted'
+
+
+def test_a_success_resets_the_failure_run(rig):
+    # Intermittent failures must not accumulate into a demotion over an
+    # afternoon of otherwise working greetings.
+    robot, caller = rig
+    speech = dispatcher(caller, tier='auto', tts_failures_before_demotion=3)
+
+    robot.tts_succeeds = False
+    speech.speak('one'); speech.speak('two')
+    robot.tts_succeeds = True
+    assert speech.speak('three') is True
+    robot.tts_succeeds = False
+    speech.speak('four'); speech.speak('five')
+    assert speech._using_tts is True, 'the run was not reset by the success'

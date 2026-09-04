@@ -461,3 +461,68 @@ def test_an_idle_status_does_not_by_itself_refuse(rig):
     robot.action_status = McActionStatus.IDLE
 
     assert mode_guard(caller).gesturing_allowed() is True
+
+
+# ------------------------------------------------ telling the modes apart
+
+def test_locomotion_resolves_as_locomotion_but_is_not_stand(rig):
+    """The narrower walking path must not quietly widen `gesturing_allowed`,
+    whose contract is still "force-control stand only"."""
+    from aimdk_msgs.msg import McAction, McActionStatus
+
+    from x2_greeter.ros.mode_guard import LOCOMOTION
+
+    robot, caller = rig
+    robot.current_action = McAction.LOCOMOTION_DEFAULT
+    robot.action_status = McActionStatus.RUNNING
+
+    guard = mode_guard(caller)
+    assert guard.resolve() == LOCOMOTION
+    assert guard.gesturing_allowed() is False
+
+
+def test_stand_still_resolves_as_stand(rig):
+    from aimdk_msgs.msg import McAction, McActionStatus
+
+    from x2_greeter.ros.mode_guard import STAND
+
+    robot, caller = rig
+    robot.current_action = McAction.STAND_DEFAULT
+    robot.action_status = McActionStatus.RUNNING
+
+    assert mode_guard(caller).resolve() == STAND
+
+
+def test_locomotion_named_only_in_the_description_also_resolves(rig):
+    # Same default-zero controller quirk as STAND_DEFAULT.
+    from aimdk_msgs.msg import McActionStatus
+
+    from x2_greeter.ros.mode_guard import LOCOMOTION
+
+    robot, caller = rig
+    robot.current_action = 0
+    robot.action_desc = 'LOCOMOTION_DEFAULT'
+    robot.action_status = McActionStatus.RUNNING
+
+    assert mode_guard(caller).resolve() == LOCOMOTION
+
+
+def test_any_other_mode_resolves_to_none(rig):
+    from aimdk_msgs.msg import McAction, McActionStatus
+
+    robot, caller = rig
+    robot.current_action = McAction.DAMPING_DEFAULT
+    robot.action_status = McActionStatus.RUNNING
+
+    assert mode_guard(caller).resolve() is None
+
+
+def test_a_transitioning_locomotion_mode_still_resolves_to_none(rig):
+    # Mid-switch is mid-switch, whichever mode it is heading for.
+    from aimdk_msgs.msg import McAction, McActionStatus
+
+    robot, caller = rig
+    robot.current_action = McAction.LOCOMOTION_DEFAULT
+    robot.action_status = McActionStatus.TRANSITION
+
+    assert mode_guard(caller).resolve() is None

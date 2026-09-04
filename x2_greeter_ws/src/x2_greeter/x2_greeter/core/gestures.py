@@ -11,10 +11,23 @@ import random
 from dataclasses import dataclass
 from typing import NamedTuple, Optional, Sequence
 
+#: McControlArea is a bit mask: LEFT_HAND 1, RIGHT_HAND 2, HEAD 4, WAIST 8.
 AREA_LEFT = 1
 AREA_RIGHT = 2
 AREA_BOTH = 3
-AREA_WHOLE_BODY = 11
+AREA_WAIST = 8
+AREA_WHOLE_BODY = 11          # left + right + waist
+
+
+def uses_waist(spec) -> bool:
+    """Does any of this gesture's areas command the waist?
+
+    The waist bit is what separates an arm wave from a bow: a motion that
+    moves the waist moves the robot's centre of mass. That distinction comes
+    from the vendor's own area mask, not from a judgement about which motions
+    look gentle, which is why it is safe to test against.
+    """
+    return any(area & AREA_WAIST for area in spec.areas)
 
 _HAND_PREFERENCE_AREAS = {
     'left': AREA_LEFT,
@@ -130,19 +143,48 @@ class GestureSelector:
     def enabled_names(self) -> tuple:
         return self._enabled
 
-    def select(self, requested: Optional[str] = None) -> GestureChoice:
-        """Honour `requested` if it is on the allowlist, otherwise choose randomly."""
-        if requested in self._enabled:
+    def select(self, requested: Optional[str] = None,
+               allowed: Optional[Sequence[str]] = None) -> GestureChoice:
+        """Honour `requested` if it is on the allowlist, otherwise choose randomly.
+
+        `allowed` narrows the pool further -- the walking whitelist, say. It
+        never widens it: a name outside `enabled` is not reachable through it,
+        so a stale walking list cannot re-enable a gesture the operator has
+        switched off.
+        """
+        pool = self._enabled
+        if allowed is not None:
+            pool = tuple(n for n in self._enabled if n in set(allowed))
+            if not pool:
+                raise ValueError('no gesture is both enabled and allowed here')
+        # A requested gesture is honoured unless it repeats the last one.
+        #
+        # Two reasons, and the second is not cosmetic. The cloud picks the
+        # gesture from the scene, and for "a stranger has walked up" the
+        # sensible pick is a wave every single time -- 34 greetings in a row on
+        # hardware, all waves, while ten other gestures sat enabled and unused.
+        # And the controller refuses the same preset motion twice in a row, so
+        # a repeat is not merely dull: roughly every other one is rejected and
+        # the robot makes no movement at all.
+        #
+        # Breaking only the repeat keeps the cloud's judgement everywhere it
+        # actually differs -- a handshake for an offered hand, a wave goodbye
+        # for somebody leaving.
+        if requested in pool and requested != self._last:
             name = requested
         else:
-            name = self._random_name()
+            name = self._random_name(pool)
         self._last = name
         spec = CATALOGUE[name]
         return GestureChoice(name=name, motion_id=spec.motion_id,
                              area_id=resolve_area(spec, self._hand_preference, self._rng))
 
-    def _random_name(self) -> str:
-        pool = [name for name in self._enabled if name != self._last]
-        if not pool:
-            pool = list(self._enabled)
-        return self._rng.choice(pool)
+    def _random_name(self, pool: Optional[Sequence[str]] = None) -> str:
+        pool = tuple(self._enabled if pool is None else pool)
+        # Avoid repeating the previous choice -- the controller refuses the
+        # same preset motion twice in a row. With a one-entry pool there is no
+        # choice to make, and the refusal is unavoidable.
+        candidates = [name for name in pool if name != self._last]
+        if not candidates:
+            candidates = list(pool)
+        return self._rng.choice(candidates)
