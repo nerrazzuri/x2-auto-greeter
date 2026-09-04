@@ -285,15 +285,19 @@ def test_a_crashed_greeting_still_lets_the_next_person_be_greeted(ros):
     calls = []
 
     def inject(node):
-        original_allowed = node.mode_guard.gesturing_allowed
+        # resolve() is what the node calls -- it needs to know *which* mode, so
+        # it can offer the narrower walking gesture list. Patching
+        # gesturing_allowed() here would inject a crash into a method the node
+        # no longer calls, and the test would pass without testing anything.
+        original_resolve = node.mode_guard.resolve
 
         def boom_once():
             calls.append(1)
             if len(calls) == 1:
                 raise RuntimeError('injected gesture-path failure')
-            return original_allowed()
+            return original_resolve()
 
-        node.mode_guard.gesturing_allowed = boom_once
+        node.mode_guard.resolve = boom_once
 
     robot, node, executor, thread = build_rig(ros, before_spin=inject)
     try:
@@ -310,7 +314,7 @@ def test_a_crashed_greeting_still_lets_the_next_person_be_greeted(ros):
         time.sleep(2.5)
         node.detector.set_detections(
             [RawDetection(bbox=BBox(270, 90, 370, 390), confidence=0.9)])
-        # The injected crash is in mode_guard.gesturing_allowed(), which runs
+        # The injected crash is in mode_guard.resolve(), which runs
         # *before* speech.speak() inside the same try block, so the crashing
         # attempt never reaches speak() at all -- only the recovery attempt
         # does. That makes exactly 1 tts_request the correct count here, not
@@ -333,7 +337,7 @@ def test_the_robot_still_speaks_when_the_mode_service_never_answers(ros):
 
     def inject(node):
         # Point the mode guard's client at a service nobody serves, so every
-        # call_with_retry attempt is dropped and gesturing_allowed() refuses.
+        # call_with_retry attempt is dropped and resolve() returns None.
         node.mode_guard._client = node.create_client(
             GetMcAction, '/aimdk_5Fmsgs/srv/GetMcAction_does_not_exist',
             callback_group=node._callback_group)

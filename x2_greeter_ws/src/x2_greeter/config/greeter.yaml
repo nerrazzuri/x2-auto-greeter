@@ -2,6 +2,16 @@
 /**:
   ros__parameters:
     camera:
+      # rgbd     -- chin RGB-D for both colour and depth (the original)
+      # stereo   -- head stereo colour, chin depth reprojected onto it
+      #
+      # On the X2 the chin module is mounted low and steeply angled: a person
+      # standing 1.5 m away passed the gate on 26% of frames, in bursts of
+      # 0.17 s, so the tracker took 5.1 s to greet them. The head stereo pair
+      # sees the same person at 0.94-1.00 confidence. It has no depth of its
+      # own, so the chin module's is reprojected into its pixels -- exact,
+      # because both cameras are fixed children of head_pitch_link.
+      source: rgbd
       rgb_topic: /aima/hal/sensor/rgbd_head_front/rgb_image
       depth_topic: /aima/hal/sensor/rgbd_head_front/depth_image
       # Metres per depth unit. 0.001 for a 16UC1 millimetre image, 1.0 for
@@ -19,6 +29,31 @@
       # arguments; this exists because that means restarting a robot service.
       rotate_180: false
 
+      # --- used only when source is 'stereo' ---
+      # The stereo image is upright; do not rotate it. Only the chin module is
+      # mounted upside down.
+      stereo_rgb_topic: /aima/hal/sensor/stereo_head_front_left/rgb_image
+      stereo_info_topic: /aima/hal/sensor/stereo_head_front_left/camera_info
+      depth_info_topic: /aima/hal/sensor/rgbd_head_front/depth_camera_info
+      # From the robot's own URDF (x2_31dof_hand.urdf), both fixed children of
+      # head_pitch_link, so the pair is a constant however the head is posed.
+      # Check them against the URDF on a new robot before trusting a distance.
+      rgbd_xyz: [0.05761, -0.011183, -0.04837]
+      rgbd_rpy: [2.2689, 0.0, 1.5708]
+      stereo_xyz: [0.067995, 0.029784, 0.05]
+      stereo_rpy: [-1.5708, 0.0, -1.574]
+      # Subsampling of the depth image and of the output map. Both trade
+      # fidelity for time; the result is a sparse splat and median_depth_m
+      # takes a median over whatever it finds.
+      #
+      # step 8, not 4. Measured on hardware: at 4 the reprojection cost half
+      # the stereo frame rate (5.7 Hz of 10) and the gate passed on 29% of
+      # frames; at 8 it runs at 9.9 Hz and the gate passed on 296 of 296. The
+      # denser sampling bought nothing -- a person's box still holds ~1950
+      # depth pixels at step 8, where a median needs tens.
+      reproject_step: 8
+      reproject_scale: 4
+
     detect:
       # mobilenet_ssd | hog | scripted. mobilenet_ssd falls back to hog with a
       # warning when the weights are absent; run tools/fetch_model.py to get them.
@@ -32,8 +67,19 @@
     presence:
       dwell_s: 1.0
       loss_grace_s: 0.5
-      clear_s: 3.0
-      cooldown_s: 30.0
+      # After a greeting the tracker waits for BOTH: cooldown_s to elapse, and
+      # clear_s with nobody in the gate at all. The clear timer restarts the
+      # moment anybody is detected, which is how "do not greet the same person
+      # forever" works without face recognition -- the tracker has no identity,
+      # so it cannot tell the next person in a queue from the one who has not
+      # left yet.
+      #
+      # The consequence, seen in a demo: greet somebody, and the person right
+      # behind them is not greeted, because their standing there keeps
+      # resetting the clear timer. 30 s / 3 s was tuned for a corridor; these
+      # are tuned for a queue.
+      clear_s: 2.0
+      cooldown_s: 10.0
       reject_cooldown_s: 5.0
       confirm_timeout_s: 10.0
 
@@ -79,11 +125,36 @@
       # auto | tts | audio_file
       tier: auto
       domain: x2_greeter
+      # TtsPriorityLevel: BACKGROUND_L1=1, SERVICE_L2=2, MISSION_L4=4,
+      # INTERACTION_L6=6, SYSTEM_L7=7, WARNING_L8=8, SAFETY_L10=10.
+      # INTERACTION_L6 is the vendor's own default for PlayTtsRequest, and the
+      # interaction module occupies the audio streams by default (SDK 8.1).
+      # Lowering this to SERVICE_L2 looked more polite and was tried on
+      # hardware: PlayTts kept answering is_success, and nothing came out of
+      # the speaker. A quieter greeter that cannot be heard is not politeness.
       priority_level: 6
+      # Consecutive PlayTts failures before falling back to recordings for the
+      # session. Never 1: a dropped cross-host response says nothing about TTS
+      # (the utterance may have played), and a priority_rejected is about one
+      # request losing audio arbitration. Demoting on a single failure once
+      # left the greeter silent for a whole session -- greeting and gesturing
+      # normally, with no sound and nothing in the log after one warning.
+      tts_failures_before_demotion: 3
       # Audio assets live on PC3 (10.0.1.42), world-readable.
       audio_dir: /var/tmp/x2_greeter_audio
       audio_file_count: 20
       phrases_file: ''
+      # Appended to every greeting, canned or cloud, one picked at random.
+      # The X2's interaction system only opens a voice session on its wake
+      # word, and nothing in the served SDK can open one for it, so the
+      # greeting ends by telling the person the words that do work. Set to an
+      # empty list on a robot where that is not true.
+      wake_invitations:
+        - Say Hi Lumi and I will be happy to chat.
+        - Call out Hi Lumi and we can have a proper conversation.
+        - Just say Hi Lumi whenever you would like to talk.
+        - If you fancy a chat, say Hi Lumi and I am all ears.
+        - Say Hi Lumi and we can talk about whatever you like.
 
     gestures:
       enabled:
@@ -98,6 +169,15 @@
         - cheer
         - blow_kiss
         - heart
+      # Gestures permitted while the robot is walking (LOCOMOTION_DEFAULT).
+      # Ships empty: the SDK documents no preset motion as safe during
+      # locomotion -- only "some motions may require the robot to be in a
+      # specific posture" -- so every entry here must be one somebody has
+      # validated on hardware. Names must also appear in `enabled` above, and
+      # must not command the waist: test_shipped_config.py enforces both,
+      # because a waist motion moves the centre of mass of a robot that is
+      # already balancing on one foot.
+      enabled_while_walking: []
       # left | right | both | random
       hand_preference: right
 
