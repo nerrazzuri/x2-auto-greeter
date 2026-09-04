@@ -208,3 +208,19 @@ def test_a_hold_expires_rather_than_muting_the_greeter_forever(ros):
     finally:
         guard.destroy()
         node.destroy_node()
+
+
+def test_our_own_greeting_holds_the_guard_while_its_audio_plays(rig):
+    """Measured on hardware: PlayStateChange.pkg_name names the *player*, so
+    everything spoken through PlayTts reports 'tts' -- ours included. Nothing
+    in the message identifies the caller, so this cannot be filtered out, and
+    it is left as it is: while one greeting is still being delivered the robot
+    should not start another at whoever has just walked up.
+    """
+    from aimdk_msgs.msg import PlayStateType
+
+    guard, _, send_play = rig
+    send_play(PlayStateType.PLAYER_STATE_PLAYING, pkg_name='tts')
+
+    reason = guard.busy_reason()
+    assert reason is not None and 'tts' in reason

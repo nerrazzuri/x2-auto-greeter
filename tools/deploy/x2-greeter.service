@@ -1,0 +1,33 @@
+# X2 auto-greeter. Nothing under /agibot is modified by this unit, and the
+# whole deployment lives in /home/run/x2_greeter, so tools/deploy/uninstall.sh
+# can remove it completely.
+#
+# The greeter only speaks and issues preset motions. It never changes the
+# robot's motion mode, so starting at boot cannot make the robot stand or move
+# on its own: outside force-control stand it speaks, refuses to gesture, and
+# says so in the log. Bringing the robot to force-control stand stays a human
+# action, with the remote.
+[Unit]
+Description=X2 auto-greeter
+Documentation=file:///home/run/x2_greeter/repo/docs/AGENT_BRINGUP_GUIDE.md
+# After the robot's own software, which owns the camera and the controller.
+# Wants, not Requires: with the robot stack down the greeter is useless but
+# harmless, and a dependency failure loop helps nobody.
+After=network-online.target agibot_software.service
+Wants=agibot_software.service
+
+[Service]
+Type=simple
+User=run
+Group=run
+Environment=X2_GREETER_ROOT=/home/run/x2_greeter
+ExecStart=/home/run/x2_greeter/bin/service.sh
+# A crash should not leave the robot silently un-greeting all day, but a crash
+# loop should not hammer the controller either.
+Restart=on-failure
+RestartSec=30
+StandardOutput=append:/home/run/x2_greeter/greeter.log
+StandardError=append:/home/run/x2_greeter/greeter.log
+
+[Install]
+WantedBy=multi-user.target

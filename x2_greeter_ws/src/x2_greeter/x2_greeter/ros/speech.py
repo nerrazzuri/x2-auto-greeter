@@ -31,7 +31,8 @@ AUDIO_CODING_FORMAT = 'wave'
 
 class SpeechDispatcher:
     def __init__(self, node, tier: str = 'auto', domain: str = 'x2_greeter',
-                 priority_level: int = 6, audio_dir: str = '/var/tmp/x2_greeter_audio',
+                 priority_level: int = 6, tts_failures_before_demotion: int = 3,
+                 audio_dir: str = '/var/tmp/x2_greeter_audio',
                  audio_file_count: int = 6, rng: Optional[random.Random] = None,
                  callback_group=None) -> None:
         if tier not in VALID_TIERS:
@@ -41,6 +42,8 @@ class SpeechDispatcher:
         self._tier = tier
         self._domain = domain
         self._priority_level = int(priority_level)
+        self._tts_failures = 0
+        self._tts_failures_before_demotion = max(1, int(tts_failures_before_demotion))
         self._audio_dir = audio_dir
         self._audio_file_count = max(1, int(audio_file_count))
         self._rng = rng if rng is not None else random.Random()
@@ -72,18 +75,39 @@ class SpeechDispatcher:
             return self._play_audio_file()
 
         if self._play_tts(text):
+            self._tts_failures = 0
             return True
 
         if self._tier != 'auto':
             return False
 
-        # One-way demotion: TTS has failed, so stop asking it for the rest of
-        # this session and use the recordings instead.
+        # Demote only after several failures in a row, never on one.
+        #
+        # A single failure means very little on this platform. The vendor
+        # documents that cross-host service responses are routinely dropped
+        # (service_call.py exists because of it), so a timeout says nothing
+        # about TTS -- the utterance may well have been spoken. And an
+        # explicit `priority_rejected` is about *this* request losing audio
+        # arbitration, not about TTS being unavailable.
+        #
+        # Demoting on one of those is how the greeter went silent for a whole
+        # session on hardware: one priority_rejected at startup switched it to
+        # pre-recorded audio, which needs an audio focus the greeter is not
+        # granted and recordings that were never deployed. It kept greeting
+        # people, kept gesturing, and made no sound, with nothing in the log
+        # after the single warning.
+        self._tts_failures += 1
+        if self._tts_failures < self._tts_failures_before_demotion:
+            self._node.get_logger().warning(
+                f'PlayTts failed ({self._tts_failures} in a row); still using TTS')
+            return False
+
         self._using_tts = False
         self._demoted = True
         self._node.get_logger().warning(
-            f'PlayTts reported failure; demoting to pre-recorded audio files in '
-            f'{self._audio_dir} for the rest of this session')
+            f'PlayTts failed {self._tts_failures} times in a row; demoting to '
+            f'pre-recorded audio files in {self._audio_dir} for the rest of '
+            f'this session')
         return self._play_audio_file()
 
     def _play_tts(self, text: str) -> bool:
@@ -91,7 +115,13 @@ class SpeechDispatcher:
         request.tts_req.text = text
         request.tts_req.domain = self._domain
         request.tts_req.trace_id = 'x2_greeter'
-        request.tts_req.is_interrupted = True       # interrupt same-priority speech
+        # The vendor's documented best practice ("Set interrupt=true to
+        # interrupt any action currently in execution"). Briefly changed to
+        # False on the theory that the greeter was breaking the robot's own
+        # interaction sessions; that theory was wrong -- the interaction system
+        # always requires its wake word -- and with False the greeting was
+        # accepted by PlayTts and never audible.
+        request.tts_req.is_interrupted = True
         request.tts_req.priority_weight = 0
         request.tts_req.priority_level.value = self._priority_level
 

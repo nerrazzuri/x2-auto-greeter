@@ -32,8 +32,8 @@ class PresenceState(Enum):
 class PresenceConfig:
     dwell_s: float = 1.0
     loss_grace_s: float = 0.5
-    clear_s: float = 3.0
-    cooldown_s: float = 30.0
+    clear_s: float = 2.0
+    cooldown_s: float = 10.0
     reject_cooldown_s: float = 5.0
     # Not in the spec's table: without it, a dropped backend future would leave
     # the machine in CONFIRMING forever and the robot would never greet again.

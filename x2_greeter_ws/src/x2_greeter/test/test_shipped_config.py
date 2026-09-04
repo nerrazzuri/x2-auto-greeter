@@ -77,6 +77,50 @@ def test_the_input_source_priority_stays_below_the_remote_controller():
         'ability to override it by picking the remote up')
 
 
+def test_the_greeter_speaks_at_the_vendor_default_priority():
+    speech = _params()['speech']
+    # INTERACTION_L6 (6) is what PlayTtsRequest documents as its default, and
+    # the interaction module occupies the audio streams (SDK 8.1). This was
+    # briefly lowered to SERVICE_L2 to be more deferential; on hardware PlayTts
+    # kept reporting is_success and no sound came out. Anything below 6 needs
+    # to be re-established as audible on a robot before it ships.
+    assert speech['priority_level'] == 6, (
+        f"speech.priority_level ({speech['priority_level']}) is not the vendor "
+        'default INTERACTION_L6. Lower values have been observed to be accepted '
+        'and inaudible.')
+
+
+def test_the_shipped_invitations_name_the_wake_word():
+    invitations = _params()['speech']['wake_invitations']
+    assert len(invitations) >= 4, 'one invitation repeated every time is not a choice'
+    for phrase in invitations:
+        assert 'Hi Lumi' in phrase, (
+            f'{phrase!r} does not name the wake word, which is the only thing '
+            'that opens a conversation on this robot')
+
+
+def test_the_walking_gesture_list_is_a_subset_of_the_enabled_ones():
+    gestures = _params()['gestures']
+    unknown = set(gestures['enabled_while_walking']) - set(gestures['enabled'])
+    assert not unknown, (
+        f'gestures listed for walking but not enabled at all: {sorted(unknown)}. '
+        'Turning a gesture off must turn it off everywhere.')
+
+
+def test_no_walking_gesture_moves_the_waist():
+    # McControlArea is a bit mask and bit 3 (8) is the waist. A motion that
+    # moves the waist moves the centre of mass -- on a robot that is mid-stride
+    # and balancing on one foot. The vendor documents no preset motion as safe
+    # during locomotion, so this is the one line that keeps a bow or a cheer
+    # out of the walking list by construction rather than by remembering.
+    from x2_greeter.core.gestures import CATALOGUE, uses_waist
+
+    offenders = [name for name in _params()['gestures']['enabled_while_walking']
+                 if uses_waist(CATALOGUE[name])]
+    assert not offenders, (
+        f'whole-body gesture(s) in the walking list: {offenders}. These command '
+        'the waist; they belong to force-control stand only.')
+
 def _conversation_params():
     with CONVERSATION_PATH.open(encoding='utf-8') as handle:
         return yaml.safe_load(handle)['/**']['ros__parameters']

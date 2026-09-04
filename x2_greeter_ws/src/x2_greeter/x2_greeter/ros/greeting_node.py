@@ -26,14 +26,16 @@ from x2_greeter.core.detection import GateConfig, gate_detections
 from x2_greeter.core.detectors import build_detector
 from x2_greeter.core.gestures import DEFAULT_ENABLED, GestureSelector
 from x2_greeter.core.imaging import to_jpeg_frame
+from x2_greeter.core.invitation import DEFAULT_INVITATIONS, append_invitation
 from x2_greeter.core.presence import PresenceConfig, PresenceState, PresenceTracker
 from x2_greeter.core.types import SceneContext
 from x2_greeter.ros.frame_source import FrameSource
 from x2_greeter.ros.gesture import GestureDispatcher
 from x2_greeter.ros.input_source import maybe_register
 from x2_greeter.ros.interaction_guard import InteractionGuard
-from x2_greeter.ros.mode_guard import ModeGuard
+from x2_greeter.ros.mode_guard import LOCOMOTION, STAND, ModeGuard
 from x2_greeter.ros.speech import SpeechDispatcher
+from x2_greeter.ros.stereo_frame_source import StereoFrameSource
 
 #: The floor for the distance reading the node has, not a guarantee about
 #: where the greeted person actually is: gate_detections (core/detection.py)
@@ -103,6 +105,9 @@ class GreetingNode(Node):
             logger=_LoggerShim(self.get_logger()))
 
         rng = random.Random()
+        self._rng = rng
+        self._invitations = tuple(self._param('speech.wake_invitations'))
+        self._walking_gestures = tuple(self._param('gestures.enabled_while_walking'))
         self.selector = GestureSelector(
             enabled=list(self._param('gestures.enabled')),
             hand_preference=self._param('gestures.hand_preference'),
@@ -119,6 +124,8 @@ class GreetingNode(Node):
             tier=self._param('speech.tier'),
             domain=self._param('speech.domain'),
             priority_level=int(self._param('speech.priority_level')),
+            tts_failures_before_demotion=int(
+                self._param('speech.tts_failures_before_demotion')),
             audio_dir=self._param('speech.audio_dir'),
             audio_file_count=int(self._param('speech.audio_file_count')),
             rng=rng,
@@ -155,19 +162,42 @@ class GreetingNode(Node):
         self._action_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='gesture')
         self._greeting_future = None
 
-        self.frames = FrameSource(
-            self,
-            rgb_topic=self._param('camera.rgb_topic'),
-            depth_topic=self._param('camera.depth_topic'),
-            on_frame=self._on_frame,
-            max_sync_skew_s=self._param('camera.max_sync_skew_s'),
-            stale_warn_s=self._param('camera.stale_warn_s'),
-            rotate_180=bool(self._param('camera.rotate_180')),
-            callback_group=self._perception_group)
+        source = str(self._param('camera.source')).strip().lower()
+        if source == 'stereo':
+            self.frames = StereoFrameSource(
+                self,
+                rgb_topic=self._param('camera.stereo_rgb_topic'),
+                rgb_info_topic=self._param('camera.stereo_info_topic'),
+                depth_topic=self._param('camera.depth_topic'),
+                depth_info_topic=self._param('camera.depth_info_topic'),
+                on_frame=self._on_frame,
+                rgbd_xyz=list(self._param('camera.rgbd_xyz')),
+                rgbd_rpy=list(self._param('camera.rgbd_rpy')),
+                stereo_xyz=list(self._param('camera.stereo_xyz')),
+                stereo_rpy=list(self._param('camera.stereo_rpy')),
+                max_sync_skew_s=self._param('camera.max_sync_skew_s'),
+                stale_warn_s=self._param('camera.stale_warn_s'),
+                step=int(self._param('camera.reproject_step')),
+                scale=int(self._param('camera.reproject_scale')),
+                callback_group=self._perception_group)
+        else:
+            if source != 'rgbd':
+                self.get_logger().error(
+                    f'unknown camera.source {source!r}; using the chin RGB-D')
+            self.frames = FrameSource(
+                self,
+                rgb_topic=self._param('camera.rgb_topic'),
+                depth_topic=self._param('camera.depth_topic'),
+                on_frame=self._on_frame,
+                max_sync_skew_s=self._param('camera.max_sync_skew_s'),
+                stale_warn_s=self._param('camera.stale_warn_s'),
+                rotate_180=bool(self._param('camera.rotate_180')),
+                callback_group=self._perception_group)
 
         self.get_logger().info(
             f'x2_greeter up: detector={type(self.detector).__name__} '
-            f'backend={primary_name} gestures={len(self.selector.enabled_names)} '
+            f'camera={source} backend={primary_name} '
+            f'gestures={len(self.selector.enabled_names)} '
             f"speech_tier={self._param('speech.tier')}")
 
     # ---------------------------------------------------------------- params
@@ -181,6 +211,19 @@ class GreetingNode(Node):
         self.declare_parameter('camera.max_sync_skew_s', 0.15)
         self.declare_parameter('camera.stale_warn_s', 5.0)
         self.declare_parameter('camera.rotate_180', False)
+        self.declare_parameter('camera.source', 'rgbd')
+        self.declare_parameter('camera.stereo_rgb_topic',
+                               '/aima/hal/sensor/stereo_head_front_left/rgb_image')
+        self.declare_parameter('camera.stereo_info_topic',
+                               '/aima/hal/sensor/stereo_head_front_left/camera_info')
+        self.declare_parameter('camera.depth_info_topic',
+                               '/aima/hal/sensor/rgbd_head_front/depth_camera_info')
+        self.declare_parameter('camera.rgbd_xyz', [0.05761, -0.011183, -0.04837])
+        self.declare_parameter('camera.rgbd_rpy', [2.2689, 0.0, 1.5708])
+        self.declare_parameter('camera.stereo_xyz', [0.067995, 0.029784, 0.05])
+        self.declare_parameter('camera.stereo_rpy', [-1.5708, 0.0, -1.574])
+        self.declare_parameter('camera.reproject_step', 8)
+        self.declare_parameter('camera.reproject_scale', 4)
 
         self.declare_parameter('detect.detector', 'mobilenet_ssd')
         self.declare_parameter('detect.model_dir', '')
@@ -191,8 +234,8 @@ class GreetingNode(Node):
 
         self.declare_parameter('presence.dwell_s', 1.0)
         self.declare_parameter('presence.loss_grace_s', 0.5)
-        self.declare_parameter('presence.clear_s', 3.0)
-        self.declare_parameter('presence.cooldown_s', 30.0)
+        self.declare_parameter('presence.clear_s', 2.0)
+        self.declare_parameter('presence.cooldown_s', 10.0)
         self.declare_parameter('presence.reject_cooldown_s', 5.0)
         self.declare_parameter('presence.confirm_timeout_s', 10.0)
 
@@ -216,12 +259,16 @@ class GreetingNode(Node):
         self.declare_parameter('speech.tier', 'auto')
         self.declare_parameter('speech.domain', 'x2_greeter')
         self.declare_parameter('speech.priority_level', 6)
+        self.declare_parameter('speech.tts_failures_before_demotion', 3)
         self.declare_parameter('speech.audio_dir', '/var/tmp/x2_greeter_audio')
         self.declare_parameter('speech.audio_file_count', len(DEFAULT_PHRASES))
         self.declare_parameter('speech.phrases_file', '')
+        self.declare_parameter('speech.wake_invitations',
+                               list(DEFAULT_INVITATIONS))
 
         self.declare_parameter('gestures.enabled', list(DEFAULT_ENABLED))
         self.declare_parameter('gestures.hand_preference', 'right')
+        self.declare_parameter('gestures.enabled_while_walking', [])
 
         self.declare_parameter('safety.require_stand_default', True)
 
@@ -355,8 +402,25 @@ class GreetingNode(Node):
 
         succeeded = False
         try:
-            choice = self.selector.select(verdict.gesture)
-            allowed = self.mode_guard.gesturing_allowed()
+            # Which gestures this motion mode permits. Standing: all of them.
+            # Walking: only gestures.enabled_while_walking, which ships empty
+            # -- the vendor documents no preset motion as safe during
+            # locomotion, so every entry has to be one somebody validated on
+            # hardware. Any other mode, or an unreadable one, refuses.
+            mode = self.mode_guard.resolve()
+            pool = None
+            allowed = mode == STAND
+            if mode == LOCOMOTION and self._walking_gestures:
+                pool = self._walking_gestures
+                allowed = True
+                self.get_logger().info(
+                    f'walking: gesturing from the walking list {list(pool)}')
+            try:
+                choice = self.selector.select(verdict.gesture, allowed=pool)
+            except ValueError as exc:
+                self.get_logger().warning(f'no gesture available here ({exc}); speaking only')
+                allowed = False
+                choice = self.selector.select(verdict.gesture)
             if allowed:
                 # This is the interlock itself, not belt and braces: it is a
                 # fixed safety floor, deliberately independent of the tunable
@@ -379,8 +443,12 @@ class GreetingNode(Node):
                         f'person at {reading[1]:.2f} m is too close to gesture')
                     allowed = False
 
+            # The wake word is the only way into a conversation on this robot,
+            # so every greeting ends by saying it. See core/invitation.py.
+            spoken = append_invitation(verdict.greeting, self._invitations, self._rng)
+
             self.get_logger().info(
-                f'greeting ({verdict.source}): {verdict.greeting!r} + {choice.name}')
+                f'greeting ({verdict.source}): {spoken!r} + {choice.name}')
 
             gesture_future = None
             if allowed:
@@ -390,7 +458,7 @@ class GreetingNode(Node):
             # Speech and gesture are independent: if one service is down, the
             # other still fires.
             try:
-                self.speech.speak(verdict.greeting)
+                self.speech.speak(spoken)
             except Exception as exc:                   # noqa: BLE001
                 self.get_logger().error(f'speech failed: {type(exc).__name__}: {exc}')
 

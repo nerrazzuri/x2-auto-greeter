@@ -19,6 +19,12 @@ from x2_greeter.ros.service_call import call_with_retry
 
 GET_ACTION_SERVICE = '/aimdk_5Fmsgs/srv/GetMcAction'
 
+#: What `resolve()` reports. Anything not named here -- an unreadable service,
+#: a mode still in TRANSITION, damping, passive, position-control stand -- is
+#: None, and None always means refuse. Not knowing is not knowing it is safe.
+STAND = 'stand'
+LOCOMOTION = 'locomotion'
+
 
 class ModeGuard:
     def __init__(self, node, require_stand_default: bool = True,
@@ -36,8 +42,20 @@ class ModeGuard:
         return self._last_action
 
     def gesturing_allowed(self) -> bool:
+        """True only in force-control stand. The original, unchanged contract."""
         if not self._require_stand_default:
             return True
+        return self.resolve() == STAND
+
+    def resolve(self):
+        """Which of the modes we act in, or None to refuse.
+
+        Split out from gesturing_allowed so the node can offer a *narrower*
+        gesture set while walking without either duplicating the reading of
+        the mode or loosening what "allowed" means.
+        """
+        if not self._require_stand_default:
+            return STAND
 
         request = GetMcAction.Request()
 
@@ -50,7 +68,7 @@ class ModeGuard:
             self._warn_once('cannot read the robot motion mode; not gesturing')
             self._last_action = None
             self._last_desc = ''
-            return False
+            return None
 
         self._last_action = int(response.info.current_action.value)
         self._last_desc = (response.info.action_desc or '').strip()
@@ -63,11 +81,14 @@ class ModeGuard:
             self._warn_once(
                 f'motion mode is still changing (status TRANSITION, currently '
                 f'{self._describe()}); speaking but not gesturing')
-            return False
+            return None
 
         if self._last_action == McAction.STAND_DEFAULT:
             self._warned = False
-            return True
+            return STAND
+        if self._last_action == McAction.LOCOMOTION_DEFAULT:
+            self._warned = False
+            return LOCOMOTION
 
         # McAction.value is a default-zero field, and this robot's controller
         # leaves it at zero while naming the real mode in action_desc -- the
@@ -78,20 +99,21 @@ class ModeGuard:
         # refusing it would make the gesture unreachable on this hardware
         # forever. Any *non-zero* value is a real answer and is trusted over
         # the description, so this can never talk the guard out of a refusal.
-        if self._last_action == 0 and self._describes_stand_default():
-            self._warn_once(
-                'controller left McAction.value unset and reports the mode only '
-                f'as action_desc={self._last_desc!r}; treating that as '
-                'STAND_DEFAULT')
-            return True
+        if self._last_action == 0 and self._last_desc:
+            described = {'STAND_DEFAULT': STAND, 'LOCOMOTION_DEFAULT': LOCOMOTION}.get(
+                self._last_desc.upper())
+            if described is not None:
+                self._warn_once(
+                    'controller left McAction.value unset and reports the mode '
+                    f'only as action_desc={self._last_desc!r}; treating that as '
+                    f'{self._last_desc.upper()}')
+                return described
 
         self._warn_once(
-            f'robot is in motion mode {self._describe()}, not STAND_DEFAULT '
-            f'({McAction.STAND_DEFAULT}); speaking but not gesturing')
-        return False
-
-    def _describes_stand_default(self) -> bool:
-        return self._last_desc.upper() == 'STAND_DEFAULT'
+            f'robot is in motion mode {self._describe()}, neither STAND_DEFAULT '
+            f'({McAction.STAND_DEFAULT}) nor LOCOMOTION_DEFAULT '
+            f'({McAction.LOCOMOTION_DEFAULT}); speaking but not gesturing')
+        return None
 
     def _describe(self) -> str:
         if self._last_desc:
