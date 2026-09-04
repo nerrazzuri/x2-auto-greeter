@@ -115,8 +115,11 @@ python3 -m pip install --user numpy opencv-python pyyaml "anthropic>=1.0" "pytes
 python3 -m pytest -q
 ```
 
-Expected: **181 passed, 69 deselected.** The 69 are marked `ros` and need
-`rclpy` plus the vendor `aimdk_msgs`; they are deselected by default.
+The `ros`-marked tests are deselected by default: they need `rclpy` plus the
+vendor `aimdk_msgs`, which a laptop does not have. Everything else runs here.
+
+If the two counts do not add up to the totals you see in a recent commit,
+something is wrong with the checkout, not with the counts -- they grow.
 
 **To run those 69 you need the vendor SDK archive, and it is not in this repo.**
 `sdk/` is gitignored — the AimDK artifacts are AgiBot's redistributable, not
@@ -127,6 +130,37 @@ SDK archive from the user's machine (or from the robot) into `sdk/` first, then:
 ```bash
 docker build -f docker/Dockerfile.test -t x2-greeter-test .
 docker run --rm -v "$PWD:/repo" -v x2-greeter-ws:/ws x2-greeter-test bash /repo/docker/run_tests.sh
+```
+
+### Running them on the robot instead
+
+The robot has `aimdk_msgs`, so the `ros` tests can be run there — but **not on
+the robot's own DDS domain**:
+
+```bash
+source /home/run/x2_greeter/env.sh
+export ROS_DOMAIN_ID=77          # anything but 0
+cd /home/run/x2_greeter/repo
+python3 -m pytest -q -m ros -p no:anyio
+```
+
+`env.sh` leaves you on domain 0, which is the robot's live graph. These tests
+stand up their own fake services and assert things like "the service is
+absent" and "nobody else is publishing on this topic" — all false when the
+real robot is answering. Measured: twelve tests fail on domain 0 and pass on a
+private one, for that reason and no other. Chasing those twelve is a wasted
+afternoon.
+
+`-p no:anyio` is needed because `anyio`, pulled in by the `anthropic` and
+`faster-whisper` installs under `$ROOT/deps`, registers a pytest plugin that
+the robot's older pytest cannot load.
+
+Also rebuild before running: the tests import the **installed** package from
+`ws/install/`, not the source tree, so an `rsync` of the repo alone tests the
+previous build.
+
+```bash
+cd /home/run/x2_greeter/ws && colcon build --packages-select x2_greeter
 ```
 
 Expected: **69 passed / 181 deselected**, then **181 passed / 69 deselected**,
