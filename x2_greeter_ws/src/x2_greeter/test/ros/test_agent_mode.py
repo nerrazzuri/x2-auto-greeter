@@ -51,11 +51,24 @@ class _FakeClient:
 
 
 class _FakeNode:
-    def __init__(self, client):
+    """AgentMode creates two clients now -- the setter and the read-back --
+    so the fake hands out a different one per service name. `service_name`
+    and `srv_type` keep meaning the setter, which is what the older tests
+    below assert on."""
+
+    def __init__(self, client, read_client=None):
         self.client = client
+        self.read_client = read_client
         self.logs = []
+        self.service_names = []
+        self.service_name = None
+        self.srv_type = None
 
     def create_client(self, srv_type, name, **kwargs):
+        from x2_greeter.ros.agent_mode import READ_SERVICE
+        self.service_names.append(name)
+        if name == READ_SERVICE:
+            return self.read_client if self.read_client is not None else _FakeClient()
         self.srv_type = srv_type
         self.service_name = name
         return self.client
@@ -169,3 +182,93 @@ def test_a_failure_is_logged_loudly_because_nothing_can_check_it_later():
     joined = ' '.join(node.logs).lower()
     assert 'only_voice' in joined
     assert 'vendor' in joined or 'agent' in joined
+
+
+# ------------------------------------------------- reading the mode back
+
+def _read_response(mode: str):
+    """A GetAgentProperties response reporting `mode` as the run mode."""
+    from aimdk_msgs.msg import AgentPropertiesValue, AgentPropertyIdType, CommonState
+    from aimdk_msgs.srv import GetAgentPropertiesRequest
+
+    response = GetAgentPropertiesRequest.Response()
+    response.header.status.value = CommonState.SUCCESS
+    item = AgentPropertiesValue()
+    key = AgentPropertyIdType()
+    key.value = AgentPropertyIdType.AGENT_PROPERTY_RUN_MODE
+    item.key = key
+    item.value = mode
+    response.contents.properties = [item]
+    return response
+
+
+def _unset_response():
+    """The vendor leaving the status UNKNOWN with a clean header -- the case
+    the read-back exists for, because it is not an answer either way."""
+    from aimdk_msgs.msg import CommonState
+    from aimdk_msgs.srv import SetAgentPropertiesRequest
+
+    response = SetAgentPropertiesRequest.Response()
+    response.header.status.value = CommonState.UNKNOWN
+    response.header.header.code = 0
+    return response
+
+
+def test_the_read_client_targets_the_read_service():
+    from x2_greeter.ros.agent_mode import READ_SERVICE
+
+    node = _FakeNode(_FakeClient(), _FakeClient())
+    _agent_mode(node=node, spin_until=_spin_ok)
+    assert READ_SERVICE in node.service_names
+    assert READ_SERVICE == '/aimdk_5Fmsgs/srv/GetAgentPropertiesRequest'
+
+
+def test_the_run_mode_is_read_back_after_it_is_set():
+    reader = _FakeClient(results=[_read_response('only_voice')])
+    node = _FakeNode(_FakeClient(results=[_ok_response()]), reader)
+    assert _agent_mode(node=node, spin_until=_spin_ok).set_only_voice() is True
+    assert len(reader.sent) == 1, 'the mode was never read back'
+
+
+def test_a_mode_that_reads_back_as_normal_is_a_failure():
+    """The whole point. The vendor accepted the request and stayed in its own
+    dialogue; before the read-back this looked like success and the only
+    symptom was the robot answering over us."""
+    reader = _FakeClient(results=[_read_response('normal')])
+    node = _FakeNode(_FakeClient(results=[_ok_response()]), reader)
+    assert _agent_mode(node=node, spin_until=_spin_ok).set_only_voice() is False
+    assert any('normal' in m for m in node.logs)
+
+
+def test_an_unset_status_is_decided_by_the_read_back():
+    reader = _FakeClient(results=[_read_response('normal')])
+    node = _FakeNode(_FakeClient(results=[_unset_response()]), reader)
+    assert _agent_mode(node=node, spin_until=_spin_ok).set_only_voice() is False
+
+
+def test_an_unset_status_that_reads_back_correctly_is_accepted():
+    reader = _FakeClient(results=[_read_response('only_voice')])
+    node = _FakeNode(_FakeClient(results=[_unset_response()]), reader)
+    assert _agent_mode(node=node, spin_until=_spin_ok).set_only_voice() is True
+
+
+def test_an_unreadable_mode_is_not_treated_as_a_refusal():
+    # A robot whose image has no read service, or a dropped response. Neither
+    # is evidence that only_voice failed, and refusing to run on that basis
+    # would take a working greeter off the road.
+    reader = _FakeClient(results=[None])
+    node = _FakeNode(_FakeClient(results=[_ok_response()]), reader)
+    assert _agent_mode(node=node, spin_until=_spin_ok).set_only_voice() is True
+    assert any('could not be read back' in m for m in node.logs)
+
+
+def test_reading_the_mode_returns_what_the_agent_reported():
+    reader = _FakeClient(results=[_read_response('no_voice')])
+    node = _FakeNode(_FakeClient(), reader)
+    assert _agent_mode(node=node, spin_until=_spin_ok).read_run_mode() == 'no_voice'
+
+
+def test_an_unreachable_read_service_reports_unknown_not_a_mode():
+    reader = _FakeClient(ready_after=99)
+    node = _FakeNode(_FakeClient(), reader)
+    assert _agent_mode(node=node, spin_until=_spin_ok).read_run_mode() is None

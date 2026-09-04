@@ -1,11 +1,24 @@
-"""Putting the vendor agent into only_voice mode.
+"""Putting the vendor agent into only_voice mode, and confirming it took.
 
-There is no GetAgentProperties service -- the interaction srv directory
-holds exactly GetMicSourceRequest, PlayTts, SetAgentPropertiesRequest and
-SetMicSourceRequest. So this can be set and its response checked, and then
-never confirmed again. If the vendor agent is still running its own
-dialogue you will hear it answer over us; that is the real check, and it
-happens with a human standing there.
+This adapter was written believing there is no GetAgentProperties service --
+that only_voice could be set and its response checked, but never confirmed,
+and that the real check was hearing the vendor answer over us with a human
+standing there.
+
+On an X2 running the v1.0 image that is not true.
+`/aimdk_5Fmsgs/srv/GetAgentPropertiesRequest` is advertised, its Request
+takes `property_ids` and its Response carries `contents: AgentProperties`.
+Asked for AGENT_PROPERTY_RUN_MODE it answered 'normal' -- which is the
+vendor agent fully enabled, running its own dialogue, and is exactly the
+state that had to be inferred from the robot talking over us.
+
+So the mode is now read back after it is set. This matters most in the case
+the code already had to guess at: a response whose status the vendor leaves
+UNKNOWN was being treated as accepted with a warning, and there was no way
+to tell that apart from a silent refusal. Now there is.
+
+A robot that does not advertise the read service falls back to the original
+behaviour and says so.
 
 Verified against the SDK's own .srv/.msg files (Ruling R13), not the vendor
 prose that first described this service:
@@ -33,7 +46,14 @@ import rclpy
 from aimdk_msgs.msg import AgentPropertiesValue, AgentPropertyIdType, CommonState
 from aimdk_msgs.srv import SetAgentPropertiesRequest
 
+try:                                   # not on every image -- see the docstring
+    from aimdk_msgs.srv import GetAgentPropertiesRequest
+except ImportError:                    # pragma: no cover - image-dependent
+    GetAgentPropertiesRequest = None
+
 SERVICE = '/aimdk_5Fmsgs/srv/SetAgentPropertiesRequest'
+READ_SERVICE = '/aimdk_5Fmsgs/srv/GetAgentPropertiesRequest'
+ONLY_VOICE = 'only_voice'
 
 # CommonResponse.status values that mean the request was accepted, matching
 # the accepted set ros/gesture.py and ros/speech.py already use for the
@@ -50,7 +70,7 @@ class AgentMode:
     def __init__(self, node, service: str = SERVICE, timeout_s: float = 2.0,
                  attempts: int = 8, retry_s: float = 0.25,
                  spin_until: Optional[Callable] = None,
-                 callback_group=None) -> None:
+                 callback_group=None, read_service: str = READ_SERVICE) -> None:
         self._node = node
         self._timeout_s = float(timeout_s)
         self._attempts = int(attempts)
@@ -62,6 +82,59 @@ class AgentMode:
             kwargs['callback_group'] = callback_group
         self._client = node.create_client(SetAgentPropertiesRequest, service,
                                           **kwargs)
+        self._read_client = None
+        if GetAgentPropertiesRequest is not None:
+            self._read_client = node.create_client(
+                GetAgentPropertiesRequest, read_service, **kwargs)
+
+    def read_run_mode(self, timeout_s: Optional[float] = None) -> Optional[str]:
+        """The vendor agent's current run mode, or None if it cannot be read.
+
+        None means "unknown", never "normal": a robot whose image does not
+        advertise the read service, an unreachable service and a dropped
+        response all land here, and none of them is evidence about what the
+        agent is doing.
+        """
+        if self._read_client is None:
+            return None
+        timeout = self._timeout_s if timeout_s is None else float(timeout_s)
+        if not self._read_client.wait_for_service(timeout_sec=self._retry_s):
+            return None
+
+        request = GetAgentPropertiesRequest.Request()
+        wanted = AgentPropertyIdType()
+        wanted.value = AgentPropertyIdType.AGENT_PROPERTY_RUN_MODE
+        request.property_ids.append(wanted)
+
+        future = self._read_client.call_async(request)
+        self._spin(self._node, future, timeout_sec=timeout)
+        response = future.result()
+        if response is None:
+            return None
+        for item in response.contents.properties:
+            if item.key.value == AgentPropertyIdType.AGENT_PROPERTY_RUN_MODE:
+                return item.value
+        return None
+
+    def _confirm_only_voice(self) -> bool:
+        """Read the mode back. Returns False only for a mode we can read and
+        that is not only_voice -- an unreadable mode is not a refusal."""
+        log = self._node.get_logger()
+        mode = self.read_run_mode()
+        if mode is None:
+            log.warning(
+                'the vendor agent run mode could not be read back, so '
+                'only_voice is unconfirmed. If the robot answers on its own, '
+                'that is why.')
+            return True
+        if mode == ONLY_VOICE:
+            log.info(f'vendor agent run mode confirmed: {mode}')
+            return True
+        log.error(
+            f'the vendor agent accepted only_voice and then reported '
+            f'run mode {mode!r}. Its own dialogue is still running and it '
+            f'will answer over us.')
+        return False
 
     def set_only_voice(self) -> bool:
         log = self._node.get_logger()
@@ -102,7 +175,7 @@ class AgentMode:
         if status_value in _ACCEPTED_STATES:
             log.info('vendor agent set to only_voice')
             self.available = True
-            return True
+            return self._confirm_only_voice()
         if status_value == CommonState.UNKNOWN and common.header.code == 0:
             # The vendor left the status unset rather than reporting one --
             # treated as accepted, the same as gesture.py's UNKNOWN+clean
@@ -111,9 +184,10 @@ class AgentMode:
             log.warning(
                 'vendor agent left the only_voice response status unset '
                 '(UNKNOWN, header.code=0); treating it as accepted')
-            log.info('vendor agent set to only_voice')
             self.available = True
-            return True
+            # The case this read-back was added for: an unset status is not
+            # an answer, so ask the agent what mode it is actually in.
+            return self._confirm_only_voice()
 
         log.error(
             f'the vendor agent refused only_voice: status={status_value}, '
