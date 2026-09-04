@@ -78,9 +78,23 @@ if [ "$NODE" = conversation ]; then
   # Needs the internet, which PC2 has and PC1 must never be used for. Into
   # $ROOT/deps, not ~/.local: `run` is the account every robot ROS node uses
   # and a --user install would shadow the system packages those nodes import.
+  #
+  # numpy<2 is not a preference. faster-whisper's dependency tree pulls numpy
+  # 2.x, $ROOT/deps comes first on PYTHONPATH, and the robot's system OpenCV is
+  # built against numpy 1.x -- so an unpinned install shadows the system numpy
+  # and every `import cv2` in the node dies with "numpy.core.multiarray failed
+  # to import". The detector, cv_bridge and the depth reprojection all go with
+  # it. Measured here: system numpy 1.26.1, deps got 2.2.6, cv2 refused to
+  # load. 1.26.4 in deps matches the system ABI and everything imports.
   echo "== installing faster-whisper into $ROOT/deps (a few minutes)"
   ssh "$TARGET" "python3 -m pip install --target=$ROOT/deps --upgrade \
-                 faster-whisper 2>&1 | tail -3"
+                 'numpy<2' faster-whisper 2>&1 | tail -3"
+  echo "== checking the deps did not shadow the robot's OpenCV"
+  ssh "$TARGET" "source $ROOT/env.sh >/dev/null 2>&1
+                 python3 -c \"import numpy, cv2
+from faster_whisper import WhisperModel
+print('   numpy', numpy.__version__, '| cv2', cv2.__version__, '| faster_whisper ok')\" \
+                 || { echo '   FAILED: see the numpy<2 note in install.sh' >&2; exit 1; }"
 fi
 
 echo "== recording which node this robot runs ($NODE)"
