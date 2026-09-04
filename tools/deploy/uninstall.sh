@@ -5,7 +5,10 @@
 # be short and complete:
 #
 #   $X2_GREETER_ROOT               everything we own -- code, workspace, model
-#                                  weights, python deps, config, secrets, logs
+#                                  weights, python deps, config, secrets, logs,
+#                                  and the faster-whisper model cache, which
+#                                  env.sh points at $ROOT/models/hf precisely
+#                                  so that removing the root removes it too
 #   /etc/systemd/system/x2-greeter.service    the only file outside it
 #
 # Nothing under /agibot is ever touched, by the deployment or by this.
@@ -19,6 +22,7 @@ echo "== stopping and disabling the service"
 sudo systemctl disable --now x2-greeter.service 2>/dev/null
 # Belt and braces: a hand-started instance is not owned by systemd.
 pkill -f "greeter.launch" 2>/dev/null
+pkill -f "conversation.launch" 2>/dev/null
 pkill -f "x2_greeter/lib" 2>/dev/null
 sleep 2
 pkill -9 -f "x2_greeter/lib" 2>/dev/null

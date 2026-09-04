@@ -14,6 +14,55 @@
       # A file under config/venues/, without the .yaml.
       profile: "clothing_store"
 
+    camera:
+      # rgbd   -- the chin RGB-D module for both colour and depth
+      # stereo -- the head stereo pair's colour, with the chin module's depth
+      #           reprojected into its pixels
+      #
+      # Phase 1 measured the difference on this hardware: the chin module is
+      # mounted low and steeply angled, and a person standing 1.5 m away
+      # passed the distance gate on 26% of frames, in bursts of 0.17 s -- 5.1 s
+      # before anybody was greeted. The head pair saw the same person at
+      # 0.94-1.00 confidence and brought that to 1.0 s. A conversation that
+      # takes five seconds to open is one the person has already left.
+      #
+      # It ships rgbd because that is what this node has been run with. Set it
+      # to stereo on a robot where the head pair has been checked, and read
+      # the coverage line the node logs at startup.
+      source: rgbd
+      rgb_topic: /aima/hal/sensor/rgbd_head_front/rgb_image
+      depth_topic: /aima/hal/sensor/rgbd_head_front/depth_image
+      depth_scale: 0.001
+      max_sync_skew_s: 0.15
+      stale_warn_s: 5.0
+      # Only the chin module is mounted upside down, and only on some robots.
+      # MobileNet-SSD does not recognise an inverted person, so getting this
+      # wrong gives a node that runs at full rate and greets nobody. Check
+      # with tools/check_camera_orientation.py; it does not apply to stereo.
+      rotate_180: false
+
+      # --- used only when source is 'stereo' ---
+      stereo_rgb_topic: /aima/hal/sensor/stereo_head_front_left/rgb_image
+      stereo_info_topic: /aima/hal/sensor/stereo_head_front_left/camera_info
+      depth_info_topic: /aima/hal/sensor/rgbd_head_front/depth_camera_info
+      # From the robot's own URDF (x2_31dof_hand.urdf): both cameras are fixed
+      # children of head_pitch_link, so the pair is constant however the head
+      # is posed. Check them against the URDF on a new robot.
+      rgbd_xyz: [0.05761, -0.011183, -0.04837]
+      rgbd_rpy: [2.2689, 0.0, 1.5708]
+      stereo_xyz: [0.067995, 0.029784, 0.05]
+      stereo_rpy: [-1.5708, 0.0, -1.574]
+      # 8, not 4: at 4 the reprojection cost half the stereo frame rate and
+      # the gate passed on 29% of frames; at 8 it runs at 9.9 Hz and passed on
+      # 296 of 296. The denser sampling bought nothing.
+      reproject_step: 8
+      reproject_scale: 4
+
+    detect:
+      # mobilenet_ssd | hog | scripted
+      detector: mobilenet_ssd
+      model_dir: ''
+
     presence:
       confidence_min: 0.5
       # Anyone inside this is addressed individually; a room where everyone

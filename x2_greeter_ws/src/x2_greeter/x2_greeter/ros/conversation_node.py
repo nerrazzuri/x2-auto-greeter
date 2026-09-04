@@ -74,6 +74,7 @@ from x2_greeter.ros.input_source import maybe_register
 from x2_greeter.ros.mode_guard import ModeGuard
 from x2_greeter.ros.service_call import DEFAULT_TIMEOUT_S, wait_for_future
 from x2_greeter.ros.speech import TTS_SERVICE, SpeechDispatcher
+from x2_greeter.ros.stereo_frame_source import StereoFrameSource
 
 # conversation.yaml pins this list to core.gestures.DEFAULT_ENABLED verbatim
 # (test_shipped_config.py), so it doubles as the node's own default.
@@ -177,13 +178,9 @@ class ConversationNode(Node):
         self.env_camera = (env_camera if env_camera is not None
                            else self._build_env_camera())
 
-        self.frames = frame_source if frame_source is not None else FrameSource(
-            self, rgb_topic=self._p('camera.rgb_topic'),
-            depth_topic=self._p('camera.depth_topic'), on_frame=self._on_frame,
-            max_sync_skew_s=float(self._p('camera.max_sync_skew_s')),
-            stale_warn_s=float(self._p('camera.stale_warn_s')),
-            rotate_180=bool(self._p('camera.rotate_180')),
-            callback_group=self._sensor_group)
+        self._camera_source = str(self._p('camera.source')).strip().lower()
+        self.frames = (frame_source if frame_source is not None
+                       else self._build_frame_source())
 
         self.agent_mode = agent_mode if agent_mode is not None else AgentMode(
             self, service=AGENT_MODE_SERVICE, callback_group=self._service_group)
@@ -198,9 +195,78 @@ class ConversationNode(Node):
         self._timer = self.create_timer(1.0, self._on_tick,
                                         callback_group=self._sensor_group)
 
+        self._log_startup()
+
         if start_worker:
             self._worker = threading.Thread(target=self._run_worker, daemon=True)
             self._worker.start()
+
+    def _build_frame_source(self):
+        """The chin RGB-D module, or the head stereo pair with the chin
+        module's depth reprojected into it.
+
+        Phase 1 measured why this switch exists: the chin module is mounted
+        low and steeply angled, and a person standing 1.5 m away passed the
+        distance gate on 26% of frames, in bursts of 0.17 s. The head pair
+        saw the same person at 0.94-1.00 confidence, and greeting time fell
+        from 5.1 s to 1.0 s. A conversation that takes five seconds to start
+        is a conversation the person has already walked out of.
+
+        Only the chin module is mounted upside down, so camera.rotate_180
+        applies to it alone; the stereo path never rotates.
+        """
+        if self._camera_source == 'stereo':
+            return StereoFrameSource(
+                self,
+                rgb_topic=self._p('camera.stereo_rgb_topic'),
+                rgb_info_topic=self._p('camera.stereo_info_topic'),
+                depth_topic=self._p('camera.depth_topic'),
+                depth_info_topic=self._p('camera.depth_info_topic'),
+                on_frame=self._on_frame,
+                rgbd_xyz=list(self._p('camera.rgbd_xyz')),
+                rgbd_rpy=list(self._p('camera.rgbd_rpy')),
+                stereo_xyz=list(self._p('camera.stereo_xyz')),
+                stereo_rpy=list(self._p('camera.stereo_rpy')),
+                max_sync_skew_s=float(self._p('camera.max_sync_skew_s')),
+                stale_warn_s=float(self._p('camera.stale_warn_s')),
+                step=int(self._p('camera.reproject_step')),
+                scale=int(self._p('camera.reproject_scale')),
+                callback_group=self._sensor_group)
+        if self._camera_source != 'rgbd':
+            self.get_logger().error(
+                f'unknown camera.source {self._camera_source!r}; '
+                f'using the chin RGB-D')
+            self._camera_source = 'rgbd'
+        return FrameSource(
+            self, rgb_topic=self._p('camera.rgb_topic'),
+            depth_topic=self._p('camera.depth_topic'), on_frame=self._on_frame,
+            max_sync_skew_s=float(self._p('camera.max_sync_skew_s')),
+            stale_warn_s=float(self._p('camera.stale_warn_s')),
+            rotate_180=bool(self._p('camera.rotate_180')),
+            callback_group=self._sensor_group)
+
+    def _log_startup(self) -> None:
+        """One line naming every switch an operator can change.
+
+        docs/HARDWARE_BRINGUP.md turns exactly one flag on at a time so that
+        "you always know which change caused what". That only works if the
+        log says which flags were actually in force -- reading it back out
+        of the YAML proves what the file says, not what the node loaded.
+        """
+        flags = ' '.join(
+            f'{name}={"on" if bool(self._p(name)) else "off"}' for name in (
+                'face.enabled', 'head.enabled', 'head.sweep_on_start',
+                'head.gaze_follow', 'base_frame.use_env_camera',
+                'hearing.enabled'))
+        self.get_logger().info(
+            f'x2_conversation up: venue={self._p("venue.profile")} '
+            f'detector={type(self.detector).__name__} '
+            f'camera={self._camera_source} '
+            f'hearing={type(self.transcriber).__name__ if self.transcriber else "none"} '
+            f'dialogue={type(self.backend).__name__} '
+            f'language={self._p("language.default")} '
+            f'gestures={len(self._p("gestures.enabled"))} '
+            f'{flags}')
 
     # -- parameters ---------------------------------------------------------
 
@@ -267,14 +333,32 @@ class ConversationNode(Node):
             # behave the same way absent an explicit override.
             'mc_input.enabled': True,
             'mc_input.timeout_ms': 1000,
-            # No camera.*/detect.* section exists in conversation.yaml at
-            # all; defaults below match config/greeter.yaml.
+            # These now have a camera:/detect: section in
+            # conversation.yaml; the defaults below match it, and match
+            # config/greeter.yaml, so a params file that predates the section
+            # still gets the same behaviour it had.
             'camera.rgb_topic': '/aima/hal/sensor/rgbd_head_front/rgb_image',
             'camera.depth_topic': '/aima/hal/sensor/rgbd_head_front/depth_image',
             'camera.depth_scale': 0.001,
             'camera.max_sync_skew_s': 0.15,
             'camera.stale_warn_s': 5.0,
             'camera.rotate_180': False,
+            # rgbd | stereo. See _build_frame_source; the stereo names and
+            # extrinsics match config/greeter.yaml, which was checked against
+            # the robot's own URDF.
+            'camera.source': 'rgbd',
+            'camera.stereo_rgb_topic':
+                '/aima/hal/sensor/stereo_head_front_left/rgb_image',
+            'camera.stereo_info_topic':
+                '/aima/hal/sensor/stereo_head_front_left/camera_info',
+            'camera.depth_info_topic':
+                '/aima/hal/sensor/rgbd_head_front/depth_camera_info',
+            'camera.rgbd_xyz': [0.05761, -0.011183, -0.04837],
+            'camera.rgbd_rpy': [2.2689, 0.0, 1.5708],
+            'camera.stereo_xyz': [0.067995, 0.029784, 0.05],
+            'camera.stereo_rpy': [-1.5708, 0.0, -1.574],
+            'camera.reproject_step': 8,
+            'camera.reproject_scale': 4,
             'detect.detector': 'mobilenet_ssd',
             'detect.model_dir': '',
         }

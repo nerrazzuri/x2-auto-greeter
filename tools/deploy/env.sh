@@ -48,6 +48,14 @@ fi
 [ -f "$X2_GREETER_ROOT/ws/install/setup.bash" ] && \
   source "$X2_GREETER_ROOT/ws/install/setup.bash"
 
+# Where faster-whisper caches its model (~460 MB for 'small'). Inside our own
+# root for two reasons: uninstall.sh removes the root, so the cache goes with
+# it and nothing is left behind on the robot; and the SDK README reserves
+# $HOME/aimdk* for the system and erases those paths on a firmware upgrade,
+# which is where a default HuggingFace cache under $HOME could end up being
+# pointed by somebody's environment.
+export HF_HOME="$X2_GREETER_ROOT/models/hf"
+
 # Secrets (ANTHROPIC_API_KEY, ANTHROPIC_CUSTOM_HEADERS). Separate 0600 file so
 # redeploying this script never clobbers the key, and no key is in the repo.
 [ -f "$X2_GREETER_ROOT/secrets" ] && . "$X2_GREETER_ROOT/secrets"

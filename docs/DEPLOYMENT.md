@@ -10,6 +10,14 @@ runbook assumes: the architecture, the untested assumptions, and the known gaps.
 
 ## 1. Prerequisites on PC2
 
+Sections 1-3 describe building by hand, which is still the quickest way to
+try something. For anything that has to be **removable**, use
+`tools/deploy/install.sh` instead: it puts every file under
+`/home/run/x2_greeter`, installs Python dependencies with
+`--target=$ROOT/deps` rather than `--user`, and `tools/deploy/uninstall.sh`
+removes the lot. `--user` below writes into `~/.local`, which belongs to
+`run` — the account every robot ROS node uses — and stays there afterwards.
+
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/aimdk/install/local_setup.bash    # provides aimdk_msgs
@@ -140,24 +148,35 @@ applies unchanged. Read `docs/HARDWARE_BRINGUP.md` before turning on anything
 this section marks as shipped-disabled — it gives the order and the reason
 for each step.
 
-### 1. New Python dependency, on PC2 only
+### 1. Installing
 
-`faster-whisper` and its `ctranslate2` backend do local speech-to-text.
-PC2 is the only host with internet, and PC1 is off limits for builds of any
-kind:
+From a laptop that can reach the robot:
 
 ```bash
-python3 -m pip install --user faster-whisper
+tools/deploy/install.sh run@10.0.1.41 --conversation --models <weights-dir> [--service]
 ```
 
-The `small` model downloads on first use (~460 MB) into the HuggingFace
-cache. **Never point that cache under `$HOME/aimdk*`** — the SDK README
-reserves those paths for the system and they are erased on firmware
-upgrade. Pre-warm the cache before the demo, not during it:
+`--conversation` is the whole difference from Phase 1. It:
 
-```bash
-python3 -c "from faster_whisper import WhisperModel; WhisperModel('small', compute_type='int8')"
-```
+- installs `faster-whisper` and its `ctranslate2` backend into
+  `/home/run/x2_greeter/deps`, **not** `~/.local`. `run` is the account
+  every robot ROS node uses, and a `--user` install shadows the system
+  packages those nodes import — and `~/.local` would survive an uninstall.
+  This step needs the internet, which PC2 has and PC1 must never be used
+  for.
+- pre-warms the `small` Whisper model (~460 MB) so the download happens now
+  and not in front of a customer. `env.sh` points `HF_HOME` at
+  `$ROOT/models/hf`, so the cache goes when the deployment goes.
+  **Never point that cache under `$HOME/aimdk*`** — the SDK README reserves
+  those paths and they are erased on a firmware upgrade.
+- seeds `/home/run/x2_greeter/site-conversation.yaml` from
+  `config/conversation.yaml`, if it is not already there. An existing site
+  file is never overwritten: it is where that robot's own tuning lives.
+- writes `/home/run/x2_greeter/node`, which is how `bin/start.sh` and the
+  systemd unit know which of the two nodes to launch.
+
+`tools/deploy/uninstall.sh` still removes all of it, the model cache
+included. `test/test_deployment_is_removable.py` is the tripwire for that.
 
 ### 2. `ANTHROPIC_API_KEY`
 
@@ -171,11 +190,23 @@ export ANTHROPIC_API_KEY=...
 ### 3. Launching
 
 ```bash
+/home/run/x2_greeter/bin/start.sh          # or: sudo systemctl start x2-greeter
+```
+
+which launches `conversation.launch.py` against
+`/home/run/x2_greeter/site-conversation.yaml`. By hand, without the
+deployment:
+
+```bash
 ros2 launch x2_greeter conversation.launch.py
 ```
 
-The venue comes from `venue.profile` in `config/conversation.yaml`. Pass
+The venue comes from `venue.profile` in the params file. Pass
 `venue:=mall_atrium` only to override the file for a single launch.
+
+`start.sh` stops **either** node before starting one, and `start.sh
+greeting` / `start.sh conversation` overrides the installed choice for a
+single run.
 
 **The Phase 1 greeter and this node must not run at the same time.** Both
 register as an MC input source *under the same name*, `x2_greeter`, at
