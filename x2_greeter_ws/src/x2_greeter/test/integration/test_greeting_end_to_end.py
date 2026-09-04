@@ -162,7 +162,22 @@ def test_someone_too_far_away_is_not_greeted(ros):
 
 
 def test_a_failing_tts_falls_back_to_an_audio_file(ros):
-    robot, node, executor, thread = build_rig(ros, robot_kwargs={'tts_succeeds': False})
+    """The end-to-end path: TTS refuses, a recording comes out instead.
+
+    The demotion threshold is passed in as 1 rather than left at the shipped
+    3, and that is not a way of dodging the rule -- it is the only way this
+    rig can reach demotion at all. ScriptedDetector puts the same person in
+    every frame and never takes them away, so presence.clear_s never elapses
+    and the node greets exactly once, however long the test waits. Three
+    failures never arrive.
+
+    Passing the threshold as a parameter also proves the node reads it, which
+    nothing else here does. How many failures it takes is pinned separately,
+    at 1, 2 and 3, in test/ros/test_speech.py.
+    """
+    robot, node, executor, thread = build_rig(
+        ros, robot_kwargs={'tts_succeeds': False},
+        extra_params=[('speech.tts_failures_before_demotion', 1)])
     try:
         assert wait_until(lambda: bool(robot.audio_requests)), 'never played a recording'
         assert node.speech.demoted is True
