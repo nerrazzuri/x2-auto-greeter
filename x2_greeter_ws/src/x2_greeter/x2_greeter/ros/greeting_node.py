@@ -130,15 +130,24 @@ class GreetingNode(Node):
             audio_file_count=int(self._param('speech.audio_file_count')),
             rng=rng,
             callback_group=self._callback_group)
-        # Registered before the first gesture can be dispatched: the arbiter
-        # discards commands from unknown sources. Failure is logged, never
-        # fatal -- see ros/input_source.py.
+        # Registered from a one-shot timer, not here: the arbiter discards
+        # commands from unknown sources, so this has to happen before the
+        # first gesture -- but it is a service call, and service calls made
+        # during construction cannot succeed. wait_for_future waits on an
+        # Event armed by a done-callback, and nothing arms it until main()
+        # reaches executor.spin(), which is after the constructor returns.
+        # Doing it here spent two seconds retrying and then logged "the
+        # controller may discard our motion commands" on every launch.
+        # Failure is still logged and never fatal -- see ros/input_source.py.
         self.input_source = maybe_register(
             self,
             enabled=bool(self._param('mc_input.enabled')),
             name=self._param('mc_input.name'),
             priority=int(self._param('mc_input.priority')),
             timeout_ms=int(self._param('mc_input.timeout_ms')),
+            callback_group=self._callback_group, register_now=False)
+        self._start_timer = self.create_timer(
+            0.5, self._register_input_source,
             callback_group=self._callback_group)
 
         # The robot's own interaction system owns the same speaker. Greeting
@@ -331,6 +340,12 @@ class GreetingNode(Node):
 
     def _now(self) -> float:
         return self.get_clock().now().nanoseconds * 1e-9
+
+    def _register_input_source(self) -> None:
+        """Register with the motion arbiter, once the executor is spinning."""
+        self.destroy_timer(self._start_timer)
+        if self.input_source is not None:
+            self.input_source.register()
 
     def _on_frame(self, bgr, depth, stamp: float) -> None:
         """Runs on a ROS executor thread. Must not block."""

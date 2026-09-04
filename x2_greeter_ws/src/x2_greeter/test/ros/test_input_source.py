@@ -61,9 +61,10 @@ def test_register_sends_the_configured_timeout(rig):
     assert robot.input_source_requests[0].input_source.timeout == 1500
 
 
-def test_register_falls_back_to_modify_when_the_name_already_exists(rig):
-    # A greeter killed without a clean shutdown leaves its source behind, so
-    # the next run's ADD is rejected. That is the normal restart path.
+def test_an_existing_source_is_modified_without_being_added_first(rig):
+    # A greeter killed without a clean shutdown leaves its source behind, and
+    # after the first run on a given robot it is always there. MODIFY is
+    # therefore the normal path, and it is tried first.
     robot, caller = rig
     robot.input_sources['x2_greeter'] = 25
 
@@ -72,8 +73,42 @@ def test_register_falls_back_to_modify_when_the_name_already_exists(rig):
 
     from aimdk_msgs.msg import McInputAction
     actions = [r.action.value for r in robot.input_source_requests]
-    assert actions == [McInputAction.INPUTACTION_ADD, McInputAction.INPUTACTION_MODIFY]
+    assert actions == [McInputAction.INPUTACTION_MODIFY]
     # MODIFY must actually correct the stale priority, not just succeed.
+    assert robot.input_sources['x2_greeter'] == 30
+
+
+def test_an_unknown_source_falls_back_to_adding_it(rig):
+    robot, caller = rig
+    reg = registrar(caller, name='x2_greeter', priority=30)
+    assert reg.register() is True
+
+    from aimdk_msgs.msg import McInputAction
+    actions = [r.action.value for r in robot.input_source_requests]
+    assert actions == [McInputAction.INPUTACTION_MODIFY, McInputAction.INPUTACTION_ADD]
+    assert robot.input_sources == {'x2_greeter': 30}
+
+
+def test_it_registers_against_a_controller_that_never_answers_a_stale_add(rig):
+    """The hardware fault, reproduced.
+
+    The X2's controller does not reject an ADD for a name it already knows --
+    it never answers it, and the unanswered requests jam the MODIFY sent
+    behind them. Measured: ADD silent for 15 s, MODIFY answered in 1 ms on
+    its own, and 0 of 8 MODIFYs answered when eight ADDs went first. The node
+    came up saying "the controller may discard our motion commands" on every
+    single launch, and the fallback written for exactly this case could never
+    run.
+
+    Trying MODIFY first never touches the silent path at all.
+    """
+    robot, caller = rig
+    robot.input_source_mode = 'silent_add'
+    robot.silent_add_delay_s = 3.0            # longer than the retry budget
+    robot.input_sources['x2_greeter'] = 25
+
+    reg = registrar(caller, name='x2_greeter', priority=30)
+    assert reg.register() is True, 'ADD-first would have hung here'
     assert robot.input_sources['x2_greeter'] == 30
 
 

@@ -6,6 +6,8 @@ was told to do something, but exactly what.
 """
 from __future__ import annotations
 
+import time
+
 import numpy as np
 import rclpy
 from aimdk_msgs.msg import CommonState, McAction, McActionStatus, McInputAction
@@ -61,7 +63,12 @@ class FakeRobot(Node):
         #   registry    -- accept/reject per the name registry (the real thing)
         #   refuse      -- always FAILURE, with a clean header.code
         #   header_only -- fill only the header, leave state at UNKNOWN
+        #   silent_add  -- what the X2's own controller does: never answer an
+        #                  ADD for a name it already knows. Not a rejection --
+        #                  no response at all, measured at 15 s, and the
+        #                  unanswered requests jam what is sent behind them.
         self.input_source_mode = input_source_mode
+        self.silent_add_delay_s = 3.0
 
         group = ReentrantCallbackGroup()
         self.create_service(PlayTts, '/aimdk_5Fmsgs/srv/PlayTts',
@@ -165,6 +172,13 @@ class FakeRobot(Node):
         name = request.input_source.name
         action = request.action.value
         known = name in self.input_sources
+
+        if (self.input_source_mode == 'silent_add'
+                and action == McInputAction.INPUTACTION_ADD and known):
+            # No reply. A real service cannot be made to return nothing, so
+            # this outlasts the caller's whole retry budget instead, which
+            # has the same effect on it.
+            time.sleep(self.silent_add_delay_s)
 
         if self.input_source_mode == 'header_only':
             # A controller that never touches `state`. header.code is a

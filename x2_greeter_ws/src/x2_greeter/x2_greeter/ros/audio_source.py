@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 from aimdk_msgs.msg import AudioVadStateType, ProcessedAudioOutput
-from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
 from x2_greeter.cognition.transcriber import SAMPLE_RATE_HZ
 
@@ -33,8 +33,17 @@ class VendorAudioSource:
         self._running = False
         self.utterances_seen = 0
 
+        # BEST_EFFORT, matching the publisher. RELIABLE is the stricter
+        # request, and DDS refuses to connect a subscriber that demands more
+        # than the publisher offers -- it does not quietly downgrade. The
+        # robot's own agent publishes this topic BEST_EFFORT/TRANSIENT_LOCAL
+        # (checked with `ros2 topic info -v /agent/process_audio_output`), so
+        # asking for RELIABLE produced exactly one warning at startup --
+        # "offering incompatible QoS. No messages will be received from it" --
+        # and then a node that ran perfectly and never heard a word.
         qos = QoSProfile(depth=qos_depth)
-        qos.reliability = ReliabilityPolicy.RELIABLE
+        qos.reliability = ReliabilityPolicy.BEST_EFFORT
+        qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
         kwargs = {}
         if callback_group is not None:
             kwargs['callback_group'] = callback_group

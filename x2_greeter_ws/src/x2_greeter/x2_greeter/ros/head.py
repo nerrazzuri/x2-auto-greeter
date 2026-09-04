@@ -51,8 +51,13 @@ class Head:
         self._pub = node.create_publisher(
             JointCommandArray, command_topic, 10, **kwargs)
 
+        # BEST_EFFORT for the same reason as ros/audio_source.py: the robot
+        # publishes this topic BEST_EFFORT/TRANSIENT_LOCAL, and a subscriber
+        # asking for RELIABLE is refused the connection rather than
+        # downgraded -- "No messages will be received from it", once, at
+        # startup, and then a head whose state never updates.
         state_qos = QoSProfile(depth=1)
-        state_qos.reliability = ReliabilityPolicy.RELIABLE
+        state_qos.reliability = ReliabilityPolicy.BEST_EFFORT
         state_qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
         self._state_sub = node.create_subscription(
             JointStateArray, state_topic, self._on_state, state_qos,

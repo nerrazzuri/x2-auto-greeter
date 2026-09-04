@@ -98,7 +98,15 @@ class AgentMode:
         if self._read_client is None:
             return None
         timeout = self._timeout_s if timeout_s is None else float(timeout_s)
-        if not self._read_client.wait_for_service(timeout_sec=self._retry_s):
+        # Discovery, retried the way the setter retries it. A single 0.25 s
+        # wait is not long enough for a cross-host service to be discovered
+        # from a client created moments earlier: on hardware the read-back
+        # reported "could not be read back" one millisecond after the client
+        # was made, which said nothing about the agent at all.
+        for _ in range(self._attempts):
+            if self._read_client.wait_for_service(timeout_sec=self._retry_s):
+                break
+        else:
             return None
 
         request = GetAgentPropertiesRequest.Request()

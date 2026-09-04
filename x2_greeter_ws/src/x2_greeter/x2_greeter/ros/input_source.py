@@ -86,20 +86,37 @@ class McInputSourceRegistrar:
         return self._name
 
     def register(self) -> bool:
-        """Add the source, falling back to modifying an existing one.
+        """Modify the source, falling back to adding it.
 
-        A second ADD of the same name is rejected by the controller — the
-        vendor example names that case explicitly — and a greeter restarted
-        without a clean shutdown will hit it every time, so MODIFY is the
-        normal path after a crash, not an edge case.
+        MODIFY first, which is the opposite of what the vendor example does,
+        and the order matters on hardware.
+
+        A source that already exists is the normal case, not an edge case: any
+        restart without a clean shutdown leaves it behind, and after the first
+        run of this node on a given robot it is always there. In that state the
+        controller does not *reject* a second ADD -- it never answers it at
+        all. Measured on an X2: ADD produced no response in 15 s, while MODIFY
+        answered in 1 ms.
+
+        Worse, the unanswered ADDs jam the service for what follows.
+        `call_with_retry` sends eight of them, and the MODIFY behind them was
+        then dropped eight times in a row -- so the fallback that exists for
+        exactly this case could never run, and the node came up every time
+        saying "the controller may discard our motion commands". The same
+        MODIFY, sent first through the same machinery, answered in 6 ms.
+
+        On a controller that has never seen this source, MODIFY is the one
+        that fails and ADD is the fallback -- one wasted round trip on the
+        first run of a robot's life, against a permanent failure on every run
+        after it.
         """
-        if self._request(McInputAction.INPUTACTION_ADD, 'add'):
+        if self._request(McInputAction.INPUTACTION_MODIFY, 'modify'):
             self._registered = True
             return True
         self._node.get_logger().info(
-            f'input source {self._name!r} could not be added (already present '
-            f'from an earlier run?); trying to modify it instead')
-        if self._request(McInputAction.INPUTACTION_MODIFY, 'modify'):
+            f'input source {self._name!r} could not be modified (not present '
+            f'yet?); adding it instead')
+        if self._request(McInputAction.INPUTACTION_ADD, 'add'):
             self._registered = True
             return True
         self._node.get_logger().warning(
@@ -169,13 +186,25 @@ class McInputSourceRegistrar:
 
 
 def maybe_register(node, enabled: bool, name: str, priority: int, timeout_ms: int,
-                   callback_group=None) -> Optional[McInputSourceRegistrar]:
-    """Build and register a source, or return None when disabled or misconfigured.
+                   callback_group=None,
+                   register_now: bool = True) -> Optional[McInputSourceRegistrar]:
+    """Build a source registrar, and register unless told to wait.
 
     Never raises: a greeter that cannot register its input source should still
     come up and speak. Speech goes through the audio module, which arbitrates
     separately, so the degraded case is the same one the gesture interlocks
     already produce — it talks, it does not gesture.
+
+    `register_now=False` builds the registrar without calling anything, so a
+    node can create the service client during construction and do the call
+    later. That split is not tidiness. rclpy's executor collects a node's
+    entities when it starts spinning and rebuilds only on a graph event, so a
+    client created *inside* a callback of an already-spinning executor can
+    have its responses go unprocessed. Measured on an X2: the identical
+    request through the identical machinery answered in 4 ms from a client
+    made before spin(), and timed out on all eight attempts from one made
+    after it — while a standalone probe against the same live service, at the
+    same moment, kept answering in milliseconds.
     """
     if not enabled:
         node.get_logger().info('mc_input.enabled is false; not registering an input source')
@@ -187,5 +216,6 @@ def maybe_register(node, enabled: bool, name: str, priority: int, timeout_ms: in
     except PriorityOutOfBand as exc:
         node.get_logger().error(f'{exc} Not registering an input source.')
         return None
-    registrar.register()
+    if register_now:
+        registrar.register()
     return registrar

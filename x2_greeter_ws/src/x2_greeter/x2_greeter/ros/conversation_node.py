@@ -184,13 +184,18 @@ class ConversationNode(Node):
 
         self.agent_mode = agent_mode if agent_mode is not None else AgentMode(
             self, service=AGENT_MODE_SERVICE, callback_group=self._service_group)
-        self.agent_mode.set_only_voice()
 
+        # Built here, called from a one-shot timer: see _deferred_start. The
+        # client has to exist before the executor starts spinning, and the
+        # call has to happen after it.
         self.input_source = maybe_register(
             self, enabled=bool(self._p('mc_input.enabled')),
-            name=self._p('mc_input.name'), priority=int(self._p('mc_input.priority')),
+            name=self._p('mc_input.name'),
+            priority=int(self._p('mc_input.priority')),
             timeout_ms=int(self._p('mc_input.timeout_ms')),
-            callback_group=self._service_group)
+            callback_group=self._service_group, register_now=False)
+        self._start_timer = self.create_timer(
+            0.5, self._deferred_start, callback_group=self._service_group)
 
         self._timer = self.create_timer(1.0, self._on_tick,
                                         callback_group=self._sensor_group)
@@ -200,6 +205,39 @@ class ConversationNode(Node):
         if start_worker:
             self._worker = threading.Thread(target=self._run_worker, daemon=True)
             self._worker.start()
+
+    def _deferred_start(self) -> None:
+        """The startup service calls, made once the executor is spinning.
+
+        Every service call in this package goes through
+        service_call.wait_for_future, which waits on an Event armed by a
+        done-callback -- and nothing arms it unless an executor is spinning
+        the node. main() constructs the node fully and only then reaches
+        executor.spin(), so a service call made during __init__ burns all
+        eight attempts at 0.25 s and reports a failure that never happened.
+
+        Measured on hardware, from a launch that looked fine: only_voice
+        could not be read back, the input source was never registered ("the
+        controller may discard our motion commands"), and each call cost two
+        seconds of retries. The vendor agent was in fact still in `normal`
+        the whole time, which is the one thing this node most needs to know.
+
+        A one-shot timer is the smallest thing that runs after spin() starts.
+        It is on the reentrant service group deliberately: this method blocks
+        for as long as the calls take, and the responses it is waiting for
+        have to be delivered while it does.
+
+        The clients themselves are still created in __init__, before spin().
+        A client created inside a callback of an already-spinning executor can
+        have its responses go unprocessed -- see maybe_register's note, which
+        records the measurement.
+        """
+        self.destroy_timer(self._start_timer)
+
+        self.agent_mode.set_only_voice()
+
+        if self.input_source is not None:
+            self.input_source.register()
 
     def _build_frame_source(self):
         """The chin RGB-D module, or the head stereo pair with the chin
