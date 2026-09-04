@@ -16,11 +16,25 @@ So busy expires: `busy_timeout_s` after the last message that set it, with a
 log line, on the principle that a greeter that talks over somebody once is a
 smaller failure than one that silently stops working.
 
-The greeter's own speech comes back on these same topics. Ignoring it is not
-an optimisation — without it the node would hear itself start speaking, mark
-itself busy, and refuse the next greeting for as long as the timeout. The
-`domain` and `pkg_name` fields exist for exactly this, and the greeter already
-stamps its own domain onto every PlayTts request.
+The greeter's own speech comes back on these same topics, and the two topics
+report the source differently — measured on hardware, not assumed:
+
+  TtsStatus.domain          the *caller*: our own requests carry speech.domain,
+                            so they are recognisable and ignored.
+  PlayStateChange.pkg_name  the *player*: everything spoken through PlayTts
+                            reports "tts", ours included. There is nothing in
+                            the message that identifies the caller.
+
+So our own greeting does hold the guard for as long as its audio plays. That is
+left deliberately, because it is the behaviour you would want anyway: while the
+robot is still delivering one greeting it should not start another at whoever
+has just walked up. It is written down because the alternative reading — that
+the filter covers both topics — is what the first version of this docstring
+claimed, and it was wrong.
+
+Filtering TtsStatus by domain is still load-bearing: without it the node hears
+itself begin to speak on *that* topic too and would be held even before any
+audio started, doubling the effect for no reason.
 """
 from __future__ import annotations
 
