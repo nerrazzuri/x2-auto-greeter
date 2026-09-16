@@ -212,8 +212,20 @@ def test_starting_goes_through_systemd_when_the_unit_is_installed():
     """bin/start.sh pkills whatever is running; systemd restarts the service
     thirty seconds later, and the robot ends up with two greeters."""
     code = _code_lines(INSTALL)
-    assert 'systemctl start x2-greeter' in code
     assert 'list-unit-files x2-greeter.service' in code
+
+
+def test_redeploying_to_a_running_robot_picks_up_the_new_build():
+    """`systemctl start` on a running service does nothing. Changing the
+    phrase list and redeploying would install the new file, report success,
+    and leave the old process saying the old lines."""
+    # echo lines excluded: the closing summary tells an operator who did not
+    # pass --start how to start a stopped service by hand, and `start` is the
+    # right verb there.
+    ran = [line for line in _code_lines(INSTALL).splitlines()
+           if 'systemctl' in line and not line.lstrip().startswith('echo')]
+    assert any('systemctl restart x2-greeter' in line for line in ran)
+    assert not any('systemctl start x2-greeter' in line for line in ran), ran
 
 
 # -- what reaches the robot --------------------------------------------------

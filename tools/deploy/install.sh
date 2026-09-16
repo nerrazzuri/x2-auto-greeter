@@ -143,9 +143,14 @@ if [ "$WANT_START" = "1" ]; then
   # Through systemd when the unit is installed: bin/start.sh kills whatever is
   # running first, and systemd would restart the service thirty seconds later,
   # leaving two greeters talking over each other.
-  echo "== starting (the node waits 45 s for the robot's camera stack)"
+  #
+  # restart, not start: `systemctl start` on a service that is already running
+  # does nothing at all. Redeploying to a robot that is already greeting people
+  # would install the new phrases and the new code, report success, and leave
+  # the old process serving the old ones -- with nothing in the log to say so.
+  echo "== restarting (the node waits 45 s for the robot's camera stack)"
   ssh -t "$TARGET" "if systemctl list-unit-files x2-greeter.service >/dev/null 2>&1; then
-                      sudo systemctl start x2-greeter.service
+                      sudo systemctl restart x2-greeter.service
                     else
                       $ROOT/bin/start.sh
                     fi"
