@@ -1,87 +1,97 @@
-"""A small drawing of the robot, painted rather than shipped.
+"""The photograph of the X2, and a panel that keeps it in proportion.
 
-An image file would have to survive PyInstaller, be found again at runtime
-from inside the bundle, and come in two versions for two themes. This is forty
-lines of QPainter that scale to any size, take their colour from the palette
-in force, and cannot go missing.
+The left column holds everything that is a fixed size -- a status line, a
+button, a menu -- so it ran out of content halfway down and the window read as
+unfinished next to the greeting table. The robot fills the rest of it. That is
+its whole job: it is the only element here allowed to take whatever height is
+going, so the two columns end level however the window is sized.
 
-It is an X2 in the pose the product is about: standing still, one arm up,
-greeting somebody. Geometric rather than cute -- this sits above a panel about
-network addresses, and a cartoon would be at odds with everything around it.
+The picture is a real photograph rather than the drawing that was here before,
+and it is cut out to a transparent ground by `cutout.py` so that it sits on
+whatever colour the customer's theme gives the panel. It is scaled on the way
+in, never upscaled past its own resolution, and drawn standing on the bottom
+edge -- the robot should look like it is on the floor, not floating in the
+middle of a gap.
 """
 from __future__ import annotations
 
-from PyQt6.QtCore import QPointF, QRectF, Qt
-from PyQt6.QtGui import QColor, QPainter, QPen, QPixmap
+import sys
+from pathlib import Path
+
+from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtGui import QPainter, QPixmap
+from PyQt6.QtWidgets import QSizePolicy, QWidget
+
+FILE = 'x2.png'
 
 
-def greeter(width: int = 132, height: int = 120,
-            ink: str = '#0f6d78', accent: str = '#2c6a45') -> QPixmap:
-    """The robot, waving, on a transparent ground."""
-    pixmap = QPixmap(width, height)
-    pixmap.fill(Qt.GlobalColor.transparent)
+def path() -> Path:
+    """Where the picture is, frozen or from source.
 
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    Frozen, build.py puts it under art/ in the bundle -- not next to the
+    payload meant for the robot, which is uploaded wholesale.
+    """
+    bundle = getattr(sys, '_MEIPASS', None)
+    if bundle:
+        return Path(bundle) / 'art' / FILE
+    return Path(__file__).resolve().parent / FILE
 
-    # One unit = one hundredth of the drawing, so every measurement below
-    # reads as a proportion and the whole thing scales with the widget.
-    ux, uy = width / 100.0, height / 100.0
-    body = QColor(ink)
-    line = QPen(body, max(1.6, 2.0 * ux), Qt.PenStyle.SolidLine,
-                Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
 
-    painter.setPen(line)
-    painter.setBrush(Qt.BrushStyle.NoBrush)
+def photograph() -> QPixmap:
+    """The robot, or a null pixmap if the file did not come along.
 
-    # Head, with the visor the X2 actually has rather than a face.
-    head = QRectF(32 * ux, 14 * uy, 36 * ux, 26 * uy)
-    painter.drawRoundedRect(head, 10 * ux, 10 * ux)
-    visor = QColor(body)
-    visor.setAlpha(45)
-    painter.setBrush(visor)
-    painter.drawRoundedRect(QRectF(37 * ux, 21 * uy, 26 * ux, 11 * uy),
-                            5 * ux, 5 * ux)
-    painter.setBrush(Qt.BrushStyle.NoBrush)
+    A missing picture must not be fatal: it is decoration, and the deployment
+    works perfectly well without it.
+    """
+    return QPixmap(str(path()))
 
-    # Two eyes, because a visor alone reads as a letterbox.
-    painter.setBrush(body)
-    for dx in (44, 56):
-        painter.drawEllipse(QPointF(dx * ux, 26.5 * uy), 2.2 * ux, 2.2 * ux)
-    painter.setBrush(Qt.BrushStyle.NoBrush)
 
-    painter.drawLine(QPointF(50 * ux, 14 * uy), QPointF(50 * ux, 8 * uy))
-    painter.setBrush(body)
-    painter.drawEllipse(QPointF(50 * ux, 6.5 * uy), 2.4 * ux, 2.4 * ux)
-    painter.setBrush(Qt.BrushStyle.NoBrush)
+class Portrait(QWidget):
+    """The robot, as tall as the space allows, standing on the bottom edge."""
 
-    painter.drawLine(QPointF(50 * ux, 40 * uy), QPointF(50 * ux, 45 * uy))
+    def __init__(self, parent: QWidget = None) -> None:
+        super().__init__(parent)
+        self._source = photograph()
+        self._scaled = QPixmap()
+        self._wanted = QSize()
+        self.setSizePolicy(QSizePolicy.Policy.Expanding,
+                           QSizePolicy.Policy.Expanding)
 
-    # Torso.
-    painter.drawRoundedRect(QRectF(34 * ux, 45 * uy, 32 * ux, 30 * uy),
-                            7 * ux, 7 * ux)
+    def has_picture(self) -> bool:
+        return not self._source.isNull()
 
-    # The raised arm is the whole point of the picture.
-    painter.drawLine(QPointF(34 * ux, 52 * uy), QPointF(22 * ux, 60 * uy))
-    painter.drawLine(QPointF(22 * ux, 60 * uy), QPointF(19 * ux, 72 * uy))
-    painter.drawLine(QPointF(66 * ux, 52 * uy), QPointF(78 * ux, 44 * uy))
-    painter.drawLine(QPointF(78 * ux, 44 * uy), QPointF(82 * ux, 31 * uy))
+    def sizeHint(self) -> QSize:
+        return QSize(240, 300)
 
-    hand = QColor(accent)
-    painter.setBrush(hand)
-    painter.setPen(QPen(hand, max(1.4, 1.6 * ux)))
-    painter.drawEllipse(QPointF(83 * ux, 28 * uy), 3.6 * ux, 3.6 * ux)
-    painter.setPen(line)
-    painter.setBrush(body)
-    painter.drawEllipse(QPointF(18.5 * ux, 74 * uy), 3.0 * ux, 3.0 * ux)
-    painter.setBrush(Qt.BrushStyle.NoBrush)
+    def minimumSizeHint(self) -> QSize:
+        # Nothing: a short window must be free to squeeze this to nothing
+        # rather than push the panels above it off the bottom.
+        return QSize(0, 0)
 
-    # Legs, planted: this robot never walks under the greeter's control, and
-    # the drawing should not suggest otherwise.
-    painter.drawLine(QPointF(43 * ux, 75 * uy), QPointF(42 * ux, 90 * uy))
-    painter.drawLine(QPointF(57 * ux, 75 * uy), QPointF(58 * ux, 90 * uy))
-    painter.drawLine(QPointF(37 * ux, 91 * uy), QPointF(47 * ux, 91 * uy))
-    painter.drawLine(QPointF(53 * ux, 91 * uy), QPointF(63 * ux, 91 * uy))
+    def paintEvent(self, _event) -> None:
+        if self._source.isNull():
+            return
+        area = self.rect()
+        if area.width() < 24 or area.height() < 24:
+            return
 
-    painter.end()
-    return pixmap
+        # Scaled in device pixels and told its own ratio, so the picture is
+        # sharp on a high-density screen instead of a blown-up 1x copy.
+        ratio = self.devicePixelRatioF()
+        wanted = QSize(int(area.width() * ratio), int(area.height() * ratio))
+        # Compared against what was asked for, not against what came back:
+        # scaled() clamps to the aspect ratio, so the returned size almost
+        # never equals the request and every paint would rescale.
+        if self._wanted != wanted:
+            self._scaled = self._source.scaled(
+                wanted, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation)
+            self._scaled.setDevicePixelRatio(ratio)
+            self._wanted = wanted
+
+        width = self._scaled.width() / ratio
+        height = self._scaled.height() / ratio
+        painter = QPainter(self)
+        painter.drawPixmap(int(area.x() + (area.width() - width) / 2),
+                           int(area.y() + area.height() - height),
+                           self._scaled)

@@ -186,7 +186,10 @@ class Deployer(QWidget):
         left.addWidget(self._masthead())
         left.addWidget(self._robot_box())
         left.addWidget(self._deploy_box())
-        left.addStretch(1)
+        # The picture takes the slack instead of an invisible spacer, so the
+        # two columns end level and the left one stops looking half-finished.
+        self.portrait = robot_art.Portrait()
+        left.addWidget(self.portrait, stretch=1)
 
         holder = QWidget()
         holder.setLayout(left)
@@ -225,36 +228,28 @@ class Deployer(QWidget):
     # -- sections ---------------------------------------------------------
 
     def _masthead(self) -> QWidget:
-        """The product, drawn, above the panel about network addresses.
+        """What this program is, in two lines, above the numbered steps.
 
-        The left column ran out of content halfway down and the window read as
-        unfinished. This is the one place a picture belongs: it says what the
-        program is for before a word is read.
+        The picture that used to sit beside these words is now at the foot of
+        the column where it has room to be a picture. This is only the name.
         """
         card = QWidget()
-        row = QHBoxLayout(card)
-        row.setContentsMargins(4, 0, 4, 0)
-        row.setSpacing(12)
-
-        art = QLabel()
-        art.setPixmap(robot_art.greeter(96, 88, ink=ACCENT, accent=OK_GREEN))
-        row.addWidget(art)
-
-        words = QVBoxLayout()
+        words = QVBoxLayout(card)
+        words.setContentsMargins(4, 0, 4, 0)
         words.setSpacing(2)
+
         title = QLabel(t('app.title'))
         title_font = QFont(title.font())
         title_font.setPointSize(title_font.pointSize() + 3)
         title_font.setBold(True)
         title.setFont(title_font)
+
         subtitle = QLabel(t('app.tagline'))
         subtitle.setWordWrap(True)
         subtitle.setStyleSheet(f'color: {WAIT_GREY};')
-        words.addStretch(1)
+
         words.addWidget(title)
         words.addWidget(subtitle)
-        words.addStretch(1)
-        row.addLayout(words, stretch=1)
         return card
 
     def _header_row(self) -> QHBoxLayout:

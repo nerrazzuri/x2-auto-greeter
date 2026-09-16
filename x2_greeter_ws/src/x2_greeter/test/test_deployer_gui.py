@@ -21,7 +21,7 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 REPO = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(REPO / 'tools'))
 
-from PyQt6.QtWidgets import QApplication, QLabel    # noqa: E402
+from PyQt6.QtWidgets import QApplication              # noqa: E402
 
 from deployer.gui.app import Deployer, FAIL_RED, OK_GREEN  # noqa: E402
 
@@ -625,20 +625,74 @@ def test_uninstall_is_not_offered_mid_deployment(app):
         window.deleteLater()
 
 
-def test_the_window_has_a_picture_of_what_it_deploys(app):
-    """The left column ran out of content halfway down and the window read as
-    unfinished. Drawn, not shipped: an image file would have to survive
-    PyInstaller and be found again from inside the bundle."""
+def test_the_photograph_ships_and_loads(app):
+    """The picture is a file now, not a drawing, so it can go missing or
+    arrive corrupt in a way a drawing never could."""
     from deployer.gui import robot_art
 
-    art = robot_art.greeter(96, 88)
-    assert not art.isNull()
-    assert art.width() == 96 and art.height() == 88
+    assert robot_art.path().exists(), '照片没跟着仓库一起走'
+    picture = robot_art.photograph()
+    assert not picture.isNull(), '照片读不出来'
+    assert picture.width() > 200 and picture.height() > 200
 
-    window = Deployer(watch_robot=False)
-    try:
-        labels = window.findChildren(QLabel)
-        assert any(l.pixmap() is not None and not l.pixmap().isNull()
-                   for l in labels), '窗口里应该有那张图'
-    finally:
-        window.deleteLater()
+
+def test_the_frozen_build_puts_the_photograph_where_the_window_looks(monkeypatch):
+    """The one failure that source runs cannot show: build.py and robot_art
+    have to agree on a directory inside the bundle, or the customer's window
+    opens with a hole in it."""
+    sys.path.insert(0, str(REPO / 'tools' / 'deployer'))
+    import build
+
+    from deployer.gui import robot_art
+
+    monkeypatch.setattr(sys, '_MEIPASS', '/tmp/bundle', raising=False)
+    looked_in = robot_art.path()
+
+    packed = build._artwork()
+    assert len(packed) == 1
+    source, _, target = packed[0][len('--add-data='):].rpartition(build.SEPARATOR)
+    assert Path(source).name == looked_in.name
+    assert looked_in.parent.name == target
+
+
+def test_the_robot_fills_the_rest_of_the_left_column(window):
+    """The column holds nothing else that can grow, so without this the
+    window ends with a tall empty gap beside the greeting table."""
+    from PyQt6.QtWidgets import QSizePolicy
+
+    portrait = window.portrait
+    assert portrait.sizePolicy().verticalPolicy() is QSizePolicy.Policy.Expanding
+    assert portrait.minimumSizeHint().height() == 0, '窗口矮的时候要能让位'
+
+    tall = portrait.parentWidget().layout()
+    index = tall.indexOf(portrait)
+    assert tall.stretch(index) == 1
+    assert all(tall.stretch(i) == 0 for i in range(tall.count()) if i != index)
+
+
+def test_the_robot_stands_on_the_floor_of_its_panel(app):
+    """Bottom-aligned, not centred: a robot floating in the middle of a gap
+    looks like a mistake, one standing on the bottom edge looks placed."""
+    from PyQt6.QtCore import QPoint
+    from PyQt6.QtGui import QColor, QPixmap, QRegion
+    from PyQt6.QtWidgets import QWidget
+    from deployer.gui import robot_art
+
+    portrait = robot_art.Portrait()
+    portrait.resize(300, 460)
+
+    canvas = QPixmap(300, 460)
+    canvas.fill(QColor('white'))
+    # Children only: with the window background drawn, every pixel differs
+    # from white and this measures the widget rather than the robot.
+    portrait.render(canvas, QPoint(), QRegion(),
+                    QWidget.RenderFlag.DrawChildren)
+
+    image = canvas.toImage()
+    painted = [y for y in range(image.height())
+               if any(image.pixelColor(x, y) != QColor('white')
+                      for x in range(0, image.width(), 3))]
+    assert painted, '什么都没画出来'
+    assert painted[-1] >= image.height() - 4, '机器人应该站在面板底部'
+    assert painted[0] > 0, '上面应该留白,不然就不是按比例缩的'
+    portrait.deleteLater()

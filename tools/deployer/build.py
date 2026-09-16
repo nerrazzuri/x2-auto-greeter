@@ -52,6 +52,19 @@ def _weights() -> list:
     return [f'--add-data={found.directory}{SEPARATOR}models']
 
 
+def _artwork() -> list:
+    """The photograph in the window, under art/ rather than beside the payload.
+
+    Everything under payload/ is uploaded to the robot; a picture of the robot
+    is not something the robot needs.
+    """
+    picture = HERE / 'gui' / 'x2.png'
+    if not picture.exists():                         # pragma: no cover
+        print('· 没有找到 x2.png,界面里不会有机器人照片。')
+        return []
+    return [f'--add-data={picture}{SEPARATOR}art']
+
+
 def _package() -> list:
     """What gets sent to the robot, under one directory of its own.
 
@@ -102,6 +115,7 @@ def main() -> int:
         '--hidden-import=paramiko',
         '--collect-submodules=paramiko',
         *_package(),
+        *_artwork(),
         *_weights(),
         str(HERE / 'gui' / 'app.py'),
     ]
