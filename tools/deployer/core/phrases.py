@@ -126,6 +126,28 @@ def apply_fixes(phrases: Sequence[str]) -> List[str]:
     return [p for p in cleaned if p]
 
 
+# Two files in this repository are named for a site, and only one of them is a
+# greeting list. The other is the deployment's settings, and it is the one a
+# customer reaches for first, because it is called klgw.yaml while the
+# greetings are called phrases-klgw.yaml. Saying "there is no phrases: section"
+# to someone who has never seen YAML tells them nothing, so the message names
+# what they opened and what to open instead.
+SETTINGS_KEYS = {'backend', 'camera', 'speech', 'presence', 'detect', 'gestures'}
+
+
+def _wrong_file(path: str, document) -> str:
+    name = os.path.basename(path)
+    if isinstance(document, dict) and SETTINGS_KEYS & set(document):
+        return (f'{name} 是部署设置文件,不是问候语。'
+                f'问候语文件的名字通常以 phrases- 开头,'
+                f'例如 phrases-klgw.yaml。')
+    return (f'{name} 里没有问候语。问候语文件应该是这样的:\n'
+            f'phrases:\n'
+            f'  - "第一句"\n'
+            f'  - "第二句"\n'
+            f'也可以直接用记事本写一个 .txt,一句一行。')
+
+
 def load(path) -> List[str]:
     """Read a phrase list from .yaml or .txt.
 
@@ -139,10 +161,12 @@ def load(path) -> List[str]:
     if path.lower().endswith(('.yaml', '.yml')):
         document = yaml.safe_load(raw) or {}
         if not isinstance(document, dict) or 'phrases' not in document:
-            raise ValueError(f'{path} 里没有 "phrases:" 这一段')
+            raise ValueError(_wrong_file(path, document))
         items = document.get('phrases') or []
         if not isinstance(items, list):
-            raise ValueError(f'{path} 的 "phrases:" 下面必须是一个列表')
+            raise ValueError(
+                f'{os.path.basename(path)} 里的 "phrases:" 下面应该是一句一行的'
+                f'列表,现在不是。')
         return [str(item).strip() for item in items if str(item).strip()]
 
     return [line.strip() for line in raw.splitlines()

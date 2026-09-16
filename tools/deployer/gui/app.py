@@ -24,7 +24,7 @@ from typing import List, Optional
 from PyQt6.QtCore import QObject, Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
-    QApplication, QCheckBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
+    QApplication, QCheckBox, QFileDialog, QGroupBox, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar,
     QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
@@ -112,32 +112,30 @@ class Deployer(QWidget):
     # -- sections ---------------------------------------------------------
 
     def _robot_box(self) -> QGroupBox:
+        """No address, user or password to fill in.
+
+        Every X2 answers on the same address with the same vendor account, so
+        asking would be offering three ways to get it wrong and no way to get
+        it more right. They are shown, not editable: a customer who cannot
+        connect needs to know what was tried, and telling them to check the
+        cable is more use than a text box.
+        """
         box = QGroupBox('1 · 机器人')
-        form = QFormLayout(box)
+        outer = QVBoxLayout(box)
 
-        self.host = QLineEdit(DEFAULT_HOST)
-        self.user = QLineEdit(DEFAULT_USER)
-        self.password = QLineEdit(DEFAULT_PASSWORD)
-        self.password.setEchoMode(QLineEdit.EchoMode.Password)
-
-        row = QHBoxLayout()
-        row.addWidget(self.host, stretch=2)
-        row.addWidget(QLabel('用户'))
-        row.addWidget(self.user, stretch=1)
-        row.addWidget(QLabel('密码'))
-        row.addWidget(self.password, stretch=1)
-        form.addRow('地址', row)
-
+        line = QHBoxLayout()
         self.detect_button = QPushButton('检测机器人')
         self.detect_button.clicked.connect(self._detect)
         self.identity = QLabel('把网线插到机器人上,然后点「检测机器人」。')
         self.identity.setWordWrap(True)
         self.identity.setStyleSheet(f'color: {WAIT_GREY};')
-
-        line = QHBoxLayout()
         line.addWidget(self.detect_button)
         line.addWidget(self.identity, stretch=1)
-        form.addRow('', line)
+        outer.addLayout(line)
+
+        target = QLabel(f'连接目标 {DEFAULT_HOST} · 用户 {DEFAULT_USER}')
+        target.setStyleSheet(f'color: {WAIT_GREY}; font-size: 11px;')
+        outer.addWidget(target)
         return box
 
     def _phrases_box(self) -> QGroupBox:
@@ -162,7 +160,7 @@ class Deployer(QWidget):
         buttons = QHBoxLayout()
         for text, slot in (('加一句', self._add_row),
                            ('删除选中', self._delete_rows),
-                           ('从文件导入', self._import),
+                           ('打开问候语文件', self._import),
                            ('自动修正', self._autofix),
                            ('保存到文件', self._export)):
             button = QPushButton(text)
@@ -248,15 +246,27 @@ class Deployer(QWidget):
         self._revalidate()
 
     def _import(self) -> None:
+        # Opens in the directory the greeting lists live in. The repository
+        # also holds tools/deploy/sites/klgw.yaml, which is that deployment's
+        # *settings* and not its greetings -- and it is the file a customer
+        # reaches for first, because it is the one named after the site.
+        start = PACKAGE_ROOT / 'x2_greeter_ws' / 'src' / 'x2_greeter' / 'config'
         path, _ = QFileDialog.getOpenFileName(
-            self, '导入问候语', '', '问候语文件 (*.yaml *.yml *.txt);;所有文件 (*)')
+            self, '打开问候语文件',
+            str(start if start.is_dir() else Path.home()),
+            '问候语 (phrases*.yaml *.txt);;所有文件 (*)')
         if not path:
             return
         try:
             self._set_rows(P.load(path))
             self._say(f'已导入 {self.table.rowCount()} 句:{path}')
         except Exception as exc:                         # noqa: BLE001
-            QMessageBox.warning(self, '这个文件读不了', str(exc))
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle('这个文件不是问候语')
+            box.setText(str(exc))
+            box.exec()
+            self._say(f'打开失败:{exc}')
 
     def _export(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
@@ -345,8 +355,7 @@ class Deployer(QWidget):
         self.detect_button.setEnabled(False)
         self.identity.setText('正在连接…')
         self.identity.setStyleSheet(f'color: {WAIT_GREY};')
-        worker = DetectWorker(self.host.text().strip(), self.user.text().strip(),
-                              self.password.text())
+        worker = DetectWorker(DEFAULT_HOST, DEFAULT_USER, DEFAULT_PASSWORD)
 
         def finished(identity, error: str) -> None:
             self.detect_button.setEnabled(True)
@@ -376,8 +385,7 @@ class Deployer(QWidget):
         self._steps_done = 0
         self._steps_total = 8 if self.autostart.isChecked() else 5
 
-        robot = Robot(self.host.text().strip(), self.user.text().strip(),
-                      self.password.text())
+        robot = Robot(DEFAULT_HOST, DEFAULT_USER, DEFAULT_PASSWORD)
         plan = Plan(package_dir=str(PACKAGE_ROOT),
                     phrases=P.apply_fixes(self._rows()),
                     weights_dir=self._weights_dir,

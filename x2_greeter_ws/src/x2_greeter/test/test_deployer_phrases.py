@@ -154,3 +154,37 @@ def test_the_generated_file_carries_the_venue_for_whoever_opens_it_next(tmp_path
     P.save(path, REAL, venue='KL Gateway Mall')
     assert 'KL Gateway Mall' in path.read_text(encoding='utf-8')
     assert yaml.safe_load(path.read_text(encoding='utf-8'))['phrases'] == REAL
+
+
+# -- opening the wrong file --------------------------------------------------
+#
+# The repository holds two files named for the same site: klgw.yaml, which is
+# that deployment's settings, and phrases-klgw.yaml, which is its greetings.
+# The first is the one a customer opens, because it is the one named after
+# their mall. What they are told at that moment decides whether they recover.
+
+REPO_ROOT = Path(__file__).resolve().parents[4]
+
+
+def test_opening_the_site_settings_by_mistake_says_which_file_to_open():
+    settings = REPO_ROOT / 'tools' / 'deploy' / 'sites' / 'klgw.yaml'
+    with pytest.raises(ValueError) as caught:
+        P.load(settings)
+    message = str(caught.value)
+    assert '设置' in message, '要说清楚打开的是什么'
+    assert 'phrases-' in message, '要说清楚该打开哪个'
+
+
+def test_opening_some_other_yaml_shows_what_a_greeting_file_looks_like(tmp_path):
+    path = tmp_path / 'notes.yaml'
+    path.write_text('title: 会议记录\n', encoding='utf-8')
+    with pytest.raises(ValueError) as caught:
+        P.load(path)
+    assert 'phrases:' in str(caught.value), '给出一个能照着写的样子'
+    assert '.txt' in str(caught.value), '给出不用碰 YAML 的退路'
+
+
+def test_the_real_greeting_file_still_opens():
+    phrases = REPO_ROOT / 'x2_greeter_ws' / 'src' / 'x2_greeter' / 'config' / \
+        'phrases-klgw.yaml'
+    assert len(P.load(phrases)) == 20
