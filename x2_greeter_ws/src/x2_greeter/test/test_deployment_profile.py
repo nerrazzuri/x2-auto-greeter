@@ -1,8 +1,12 @@
 """The deployment profile and the script that applies it.
 
-install.sh --site klgw is the whole configuration step of a deployment: get
-this wrong and a robot greets people from the wrong script, or calls a cloud
-backend that was meant to be off. Both of those look like a working robot.
+install.sh --phrases klgw is the whole configuration step of a deployment:
+get this wrong and a robot greets people from the wrong script, or calls a
+cloud backend that was meant to be off. Both look like a working robot.
+
+robot_settings.yaml holds what every deployment sets and no customer changes;
+the phrase list is the one value that differs, so it is the only one the flag
+names.
 
 Plain YAML and one stdlib script, so no ROS and no marker -- the same shape as
 test_shipped_config.py.
@@ -17,7 +21,7 @@ import yaml
 
 PACKAGE = Path(__file__).resolve().parents[1]
 REPO = PACKAGE.parents[2]
-PROFILE = REPO / 'tools' / 'deploy' / 'sites' / 'klgw.yaml'
+PROFILE = REPO / 'tools' / 'deploy' / 'robot_settings.yaml'
 APPLY = REPO / 'tools' / 'deploy' / 'apply_site.py'
 SHIPPED = PACKAGE / 'config' / 'greeter.yaml'
 PHRASES = PACKAGE / 'config' / 'phrases-klgw.yaml'
@@ -25,10 +29,14 @@ PHRASES = PACKAGE / 'config' / 'phrases-klgw.yaml'
 SHARE = '/home/run/x2_greeter/ws/install/x2_greeter/share/x2_greeter/config'
 
 
-def _apply(site: Path, profile: Path = PROFILE):
-    return subprocess.run(
-        [sys.executable, str(APPLY), str(site), str(profile), '--share', SHARE],
-        capture_output=True, text=True)
+def _apply(site: Path, profile: Path = PROFILE, phrases=True):
+    """Apply the overlay install.sh builds: the shared settings, plus the one
+    line naming this customer's phrase list."""
+    command = [sys.executable, str(APPLY), str(site), str(profile),
+               '--share', SHARE]
+    if phrases and profile is PROFILE:
+        command += ['--set', f'speech.phrases_file={SHARE}/phrases-klgw.yaml']
+    return subprocess.run(command, capture_output=True, text=True)
 
 
 def _params(path: Path):
@@ -158,7 +166,6 @@ def test_a_missing_block_is_refused_rather_than_guessed_at(tmp_path):
 # -- install.sh's side of it -------------------------------------------------
 
 INSTALL = REPO / 'tools' / 'deploy' / 'install.sh'
-SITES = REPO / 'tools' / 'deploy' / 'sites'
 
 
 def _code_lines(path: Path):
@@ -168,8 +175,8 @@ def _code_lines(path: Path):
                      if not line.lstrip().startswith('#'))
 
 
-@pytest.mark.parametrize('profile', sorted(SITES.glob('*.yaml')), ids=lambda p: p.stem)
-def test_every_site_profile_names_blocks_the_shipped_config_has(profile):
+@pytest.mark.parametrize('profile', [PROFILE], ids=lambda p: p.stem)
+def test_every_settings_file_names_blocks_the_shipped_config_has(profile):
     """A profile that names a block greeter.yaml does not have is a typo that
     would otherwise surface as a failed install halfway through a deployment."""
     shipped = _params(SHIPPED)
@@ -178,13 +185,31 @@ def test_every_site_profile_names_blocks_the_shipped_config_has(profile):
         assert isinstance(keys, dict), f'{profile.name}: "{block}" must be a block of keys'
 
 
-def test_an_unknown_site_name_fails_before_anything_is_copied(tmp_path):
+def test_an_unknown_phrase_list_fails_before_anything_is_copied():
     result = subprocess.run(
-        ['bash', str(INSTALL), 'nobody@example.invalid', '--site', 'nosuchplace'],
+        ['bash', str(INSTALL), 'nobody@example.invalid', '--phrases', 'nosuchplace'],
         capture_output=True, text=True, timeout=30)
     assert result.returncode == 2
     assert 'nosuchplace' in result.stderr
-    assert 'klgw' in result.stderr, 'it should say which profiles do exist'
+    assert 'klgw' in result.stderr, 'it should say which lists do exist'
+
+
+def test_the_old_site_flag_says_what_replaced_it():
+    """Anyone with the previous command in their notes gets told where it
+    went, rather than "unknown option"."""
+    result = subprocess.run(
+        ['bash', str(INSTALL), 'nobody@example.invalid', '--site', 'klgw'],
+        capture_output=True, text=True, timeout=30)
+    assert result.returncode == 2
+    assert '--phrases' in result.stderr
+
+
+def test_the_settings_are_the_same_for_every_customer():
+    """The file is named for what it is, not for one venue. A per-customer
+    key in it would mean every new customer edits a shared file."""
+    settings = yaml.safe_load(PROFILE.read_text())
+    assert 'phrases_file' not in settings.get('speech', {}), (
+        '问候语是唯一因客户而异的东西,不该写在共用的设置里')
 
 
 def test_the_service_step_allocates_a_terminal_for_sudo():
@@ -257,3 +282,22 @@ def test_nothing_deployed_points_at_a_path_that_is_not_deployed():
             assert not reference.startswith('docs/'), (
                 f'{path.name} points at {reference}, which install.sh no '
                 f'longer copies')
+
+
+def test_adding_the_phrase_list_does_not_cost_the_speech_tier(site):
+    """The trap that nearly shipped: robot_settings.yaml already has a
+    `speech:` block, and appending a second one as text makes YAML keep only
+    the last -- taking speech.tier with it, which is what stops a robot
+    demoting to recordings of somebody else's greetings."""
+    assert _apply(site).returncode == 0
+    speech = _params(site)['speech']
+    assert speech['tier'] == 'tts'
+    assert speech['phrases_file'].endswith('phrases-klgw.yaml')
+
+
+def test_set_refuses_a_pair_it_cannot_understand(site):
+    result = subprocess.run(
+        [sys.executable, str(APPLY), str(site), str(PROFILE),
+         '--set', 'nonsense'], capture_output=True, text=True)
+    assert result.returncode != 0
+    assert 'BLOCK.KEY=VALUE' in result.stderr

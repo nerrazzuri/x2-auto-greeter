@@ -80,10 +80,24 @@ def main(argv=None) -> int:
                         help="replaces @SHARE@ in the profile's values")
     parser.add_argument('--root', default='',
                         help="replaces @ROOT@ in the profile's values")
+    # One more key, from the command line rather than the file. The phrase
+    # list is the only value that differs between customers, and appending it
+    # to the profile as text would write a second `speech:` block -- which
+    # YAML resolves by keeping the last one, silently dropping speech.tier.
+    parser.add_argument('--set', action='append', default=[],
+                        metavar='BLOCK.KEY=VALUE',
+                        help='set one more key, e.g. speech.phrases_file=/x.yaml')
     args = parser.parse_args(argv)
 
     with open(args.profile, encoding='utf-8') as handle:
         profile = yaml.safe_load(handle) or {}
+
+    for pair in args.set:
+        dotted, _, value = pair.partition('=')
+        block, _, key = dotted.partition('.')
+        if not block or not key or not value:
+            raise SystemExit(f'--set 要写成 BLOCK.KEY=VALUE,收到的是 {pair!r}')
+        profile.setdefault(block, {})[key] = value
 
     with open(args.site, encoding='utf-8') as handle:
         lines = handle.readlines()

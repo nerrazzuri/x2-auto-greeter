@@ -1,20 +1,22 @@
-# KL Gateway Mall. Applied to a robot's site.yaml by install.sh --site klgw.
+# What every X2 greeter deployment sets, on top of the shipped greeter.yaml.
 #
-# Only the keys that differ from the shipped greeter.yaml belong here. Every
-# other value -- the detection gates, the safety interlocks, the timings tuned
-# on hardware -- stays where it is documented, in greeter.yaml, and is not
-# repeated or shadowed by this file.
+# Not per customer. These four decisions came out of bring-up on real hardware
+# and hold for every venue: run offline, use the head stereo pair, never fall
+# back to recordings. What differs from one customer to the next is the
+# greeting list, and that is chosen with install.sh --phrases NAME.
 #
-# @SHARE@ is replaced with the installed package's config directory.
+# Only keys that differ from greeter.yaml belong here. Everything else -- the
+# detection gates, the safety interlocks, the timings tuned on hardware --
+# stays where it is documented and is not repeated or shadowed by this file.
 #
 # Deliberately NOT here: camera.rotate_180. Whether the chin module is mounted
 # upside down is a property of one robot, not of this deployment, and it has
 # no effect at all while camera.source is stereo. It stays a per-robot value
-# that tools/check_camera_orientation.py answers.
+# in that robot's own site.yaml, which is seeded once and never overwritten.
 
 backend:
   # No cloud call, so no ANTHROPIC_API_KEY and no per-greeting latency: the
-  # phrases below are the whole vocabulary. The client supplied the script.
+  # phrase list is the whole vocabulary, and the customer wrote it.
   provider: canned
 
 camera:
@@ -25,9 +27,8 @@ camera:
   source: stereo
 
 speech:
-  phrases_file: '@SHARE@/phrases-klgw.yaml'
   # tts, not auto. `auto` demotes to the recordings on PC3 after repeated TTS
   # failures, and those were recorded from config/phrases.yaml -- so a demoted
-  # robot would start saying lines that are not in the client's script.
+  # robot would start saying lines that are not in the customer's script.
   # Silence is the better failure here.
   tier: tts

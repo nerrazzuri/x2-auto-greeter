@@ -126,12 +126,11 @@ def apply_fixes(phrases: Sequence[str]) -> List[str]:
     return [p for p in cleaned if p]
 
 
-# Two files in this repository are named for a site, and only one of them is a
-# greeting list. The other is the deployment's settings, and it is the one a
-# customer reaches for first, because it is called klgw.yaml while the
-# greetings are called phrases-klgw.yaml. Saying "there is no phrases: section"
-# to someone who has never seen YAML tells them nothing, so the message names
-# what they opened and what to open instead.
+# A customer looking for their greetings will sooner or later open something
+# else: the robot's settings, the shipped config, a note they wrote. Saying
+# "there is no phrases: section" to someone who has never seen YAML tells them
+# nothing about what they did, so the message names the file they opened and
+# says what a greeting file looks like instead.
 SETTINGS_KEYS = {'backend', 'camera', 'speech', 'presence', 'detect', 'gestures'}
 
 

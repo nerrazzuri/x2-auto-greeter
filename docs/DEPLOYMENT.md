@@ -15,7 +15,7 @@ From a laptop that can reach the robot, with the repository checked out:
 ```bash
 python3 tools/fetch_model.py --dest ~/x2-models          # once per laptop
 bash tools/deploy/install.sh run@10.0.1.41 \
-     --models ~/x2-models --site klgw --service --start
+     --models ~/x2-models --phrases klgw --service --start
 ```
 
 That copies the repository to `/home/run/x2_greeter`, builds it there, seeds
@@ -26,12 +26,14 @@ sudo password, and once more for SSH if the deploying key is not installed yet.
 It writes nothing outside `/home/run/x2_greeter`, and
 `tools/deploy/uninstall.sh` removes the lot.
 
-**`--site NAME`** applies `tools/deploy/sites/NAME.yaml` on top of the seeded
-`site.yaml`: the handful of values that differ for one deployment, kept in
-version control instead of typed into an editor on site. `klgw` is KL Gateway
-Mall — the client's own phrase list, the head stereo pair, no cloud backend.
-Run without `--site` to deploy the shipped defaults. An unknown name fails
-before anything is copied, and lists the profiles that do exist.
+**`--phrases NAME`** points the robot at `config/phrases-NAME.yaml` and
+applies `tools/deploy/robot_settings.yaml` — the settings every greeter
+deployment needs: offline backend, head stereo pair, no fallback to
+recordings. Those are the same for every customer, which is why they are in a
+file named for what they are rather than for one venue; the greeting list is
+the only thing that differs, so it is the only thing the flag names. Run
+without `--phrases` to deploy the shipped defaults. An unknown name fails
+before anything is copied, and lists the ones that do exist.
 
 Per-robot values stay per-robot: `site.yaml` is seeded once and never
 overwritten by a later install, so `camera.rotate_180` and anything else proven

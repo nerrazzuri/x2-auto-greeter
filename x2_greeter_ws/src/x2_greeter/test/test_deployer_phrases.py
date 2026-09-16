@@ -158,16 +158,15 @@ def test_the_generated_file_carries_the_venue_for_whoever_opens_it_next(tmp_path
 
 # -- opening the wrong file --------------------------------------------------
 #
-# The repository holds two files named for the same site: klgw.yaml, which is
-# that deployment's settings, and phrases-klgw.yaml, which is its greetings.
-# The first is the one a customer opens, because it is the one named after
-# their mall. What they are told at that moment decides whether they recover.
+# A customer looking for their greetings will sooner or later open something
+# else. What they are told at that moment decides whether they recover on
+# their own or phone somebody.
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
-def test_opening_the_site_settings_by_mistake_says_which_file_to_open():
-    settings = REPO_ROOT / 'tools' / 'deploy' / 'sites' / 'klgw.yaml'
+def test_opening_the_robot_settings_by_mistake_says_which_file_to_open():
+    settings = REPO_ROOT / 'tools' / 'deploy' / 'robot_settings.yaml'
     with pytest.raises(ValueError) as caught:
         P.load(settings)
     message = str(caught.value)

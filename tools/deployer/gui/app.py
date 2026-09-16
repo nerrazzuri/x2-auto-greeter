@@ -246,10 +246,10 @@ class Deployer(QWidget):
         self._revalidate()
 
     def _import(self) -> None:
-        # Opens in the directory the greeting lists live in. The repository
-        # also holds tools/deploy/sites/klgw.yaml, which is that deployment's
-        # *settings* and not its greetings -- and it is the file a customer
-        # reaches for first, because it is the one named after the site.
+        # Opens in the directory the greeting lists live in, filtered to
+        # them. Anything else a customer might open -- the robot's settings,
+        # the shipped config -- is a YAML with no greetings in it, and
+        # phrases.load() names it rather than talking about sections.
         start = PACKAGE_ROOT / 'x2_greeter_ws' / 'src' / 'x2_greeter' / 'config'
         path, _ = QFileDialog.getOpenFileName(
             self, '打开问候语文件',

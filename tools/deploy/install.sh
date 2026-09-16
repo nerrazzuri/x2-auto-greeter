@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
 # Install the greeter on a robot's PC2. Run from a laptop that can reach it.
 #
-#   ./install.sh run@10.0.1.41 [--models DIR] [--wheels DIR] [--site NAME]
+#   ./install.sh run@10.0.1.41 [--models DIR] [--wheels DIR] [--phrases NAME]
 #                              [--service] [--start]
 #
 # A whole deployment in one command:
 #
-#   ./install.sh run@10.0.1.41 --models ~/x2-models --site klgw --service --start
+#   ./install.sh run@10.0.1.41 --models ~/x2-models --phrases klgw --service --start
 #
-# --site NAME applies tools/deploy/sites/NAME.yaml to the robot's site.yaml --
-# the handful of values that differ for one deployment (which phrase list,
-# which camera, whether the cloud backend is used at all), version-controlled
-# rather than typed into an editor on site. --service installs the systemd
-# unit and enables it for boot; --start also starts it now. Both need the
-# robot's sudo password, so they allocate a terminal and will prompt.
+# --phrases NAME points the robot at config/phrases-NAME.yaml and applies
+# tools/deploy/robot_settings.yaml, which holds the settings every greeter
+# deployment needs: offline backend, head stereo pair, no fallback to
+# recordings. Those are the same for every customer; the greeting list is the
+# only thing that is not, which is why it is the only thing this flag names.
+# --service installs the systemd unit and enables it for boot; --start also
+# starts it now. Both need the robot's sudo password, so they allocate a
+# terminal and will prompt.
 #
 # Everything lands in one directory so tools/deploy/uninstall.sh can remove the
 # whole deployment. Nothing under /agibot is written, ever.
@@ -25,16 +27,18 @@
 # what it reports.
 set -e
 
-TARGET=${1:?usage: install.sh user@host [--models DIR] [--wheels DIR] [--site NAME] [--service] [--start]}
+TARGET=${1:?usage: install.sh user@host [--models DIR] [--wheels DIR] [--phrases NAME] [--service] [--start]}
 shift
 ROOT=/home/run/x2_greeter
 SHARE=$ROOT/ws/install/x2_greeter/share/x2_greeter/config
-MODELS=""; WHEELS=""; SITE=""; WANT_SERVICE=0; WANT_START=0
+MODELS=""; WHEELS=""; PHRASES=""; WANT_SERVICE=0; WANT_START=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --models) MODELS=$2; shift 2 ;;
     --wheels) WHEELS=$2; shift 2 ;;
-    --site) SITE=$2; shift 2 ;;
+    --phrases) PHRASES=$2; shift 2 ;;
+    --site) echo "--site is now --phrases (settings moved to robot_settings.yaml)" >&2
+            exit 2 ;;
     --service) WANT_SERVICE=1; shift ;;
     --start) WANT_START=1; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
@@ -43,15 +47,19 @@ done
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 
-# Checked before anything is copied: a typo in --site is worth two seconds
-# here rather than a five-minute install that ends in a robot configured for
-# nowhere in particular.
-PROFILE=""
-if [ -n "$SITE" ]; then
-  PROFILE=$HERE/sites/$SITE.yaml
-  [ -f "$PROFILE" ] || {
-    echo "no such site profile: $PROFILE" >&2
-    echo "available: $(ls "$HERE/sites" 2>/dev/null | sed 's/\.yaml$//' | tr '\n' ' ')" >&2
+# Checked before anything is copied: a typo in --phrases is worth two seconds
+# here rather than a five-minute install that ends in a robot greeting a mall
+# from the built-in English jokes.
+SETTINGS=""
+PHRASES_FILE=""
+if [ -n "$PHRASES" ]; then
+  SETTINGS=$HERE/robot_settings.yaml
+  PHRASES_FILE=$SHARE/phrases-$PHRASES.yaml
+  LOCAL_PHRASES=$(cd "$HERE/../.." && pwd)/x2_greeter_ws/src/x2_greeter/config/phrases-$PHRASES.yaml
+  [ -f "$LOCAL_PHRASES" ] || {
+    echo "no such phrase list: config/phrases-$PHRASES.yaml" >&2
+    echo "available: $(ls "$(dirname "$LOCAL_PHRASES")"/phrases-*.yaml 2>/dev/null \
+          | xargs -r -n1 basename | sed 's/^phrases-//;s/\.yaml$//' | tr '\n' ' ')" >&2
     exit 2
   }
 fi
@@ -114,13 +122,16 @@ ssh "$TARGET" "[ -f $ROOT/site.yaml ] || { \
     sed -i \"s|^      model_dir: ''|      model_dir: $ROOT/models|\" $ROOT/site.yaml && \
     echo '   seeded (camera.rotate_180 left at its default -- verify it)'; }"
 
-if [ -n "$PROFILE" ]; then
-  echo "== applying the $SITE site profile to site.yaml"
-  rsync -a "$PROFILE" "$TARGET:/tmp/x2-site-profile.yaml"
+if [ -n "$SETTINGS" ]; then
+  echo "== applying robot_settings.yaml, greeting from phrases-$PHRASES.yaml"
+  rsync -a "$SETTINGS" "$TARGET:/tmp/x2-settings.yaml"
   rsync -a "$HERE/apply_site.py" "$TARGET:/tmp/x2-apply-site.py"
-  ssh "$TARGET" "python3 /tmp/x2-apply-site.py $ROOT/site.yaml /tmp/x2-site-profile.yaml \
-                   --share $SHARE --root $ROOT
-                 rm -f /tmp/x2-site-profile.yaml /tmp/x2-apply-site.py"
+  # --set, not appended text: robot_settings.yaml already has a `speech:`
+  # block, and a second one would win outright and take speech.tier with it.
+  ssh "$TARGET" "python3 /tmp/x2-apply-site.py $ROOT/site.yaml /tmp/x2-settings.yaml \
+                   --share $SHARE --root $ROOT \
+                   --set speech.phrases_file=$PHRASES_FILE
+                 rm -f /tmp/x2-settings.yaml /tmp/x2-apply-site.py"
 fi
 
 if [ "$WANT_SERVICE" = "1" ]; then
