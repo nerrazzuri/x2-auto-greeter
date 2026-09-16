@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 from dataclasses import dataclass
 from typing import List, Optional, Sequence
 
@@ -143,6 +144,37 @@ def _wrong_file(path: str, document) -> str:
     if isinstance(document, dict) and SETTINGS_KEYS & set(document):
         return t('problem.not_greetings', name=name)
     return t('problem.no_phrases', name=name)
+
+
+def default_path() -> Optional[str]:
+    """The sample greeting list that ships with the deployer, if it is here.
+
+    Venue-neutral on purpose: the KL Gateway Mall list names a mall and a
+    company, and handing those to a different customer as their starting point
+    would be worse than handing them nothing.
+    """
+    import sys
+
+    bundle = getattr(sys, '_MEIPASS', None)
+    roots = ([Path(bundle) / 'payload'] if bundle else
+             [Path(__file__).resolve().parents[3]])
+    for root in roots:
+        candidate = (root / 'x2_greeter_ws' / 'src' / 'x2_greeter' /
+                     'config' / 'phrases.yaml')
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def defaults() -> List[str]:
+    """The sample list, or nothing if the deployer was unpacked without it."""
+    path = default_path()
+    if path is None:
+        return []
+    try:
+        return load(path)
+    except (OSError, ValueError):
+        return []
 
 
 def load(path) -> List[str]:

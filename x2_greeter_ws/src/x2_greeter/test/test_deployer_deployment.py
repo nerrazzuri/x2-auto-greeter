@@ -248,3 +248,16 @@ def test_the_phrases_written_to_the_robot_are_the_ones_the_robot_loads(weights):
                                      encoding='utf-8') as handle:
         handle.write(written)
     assert list(load_phrases(handle.name)) == PHRASES
+
+
+def test_an_empty_greeting_list_never_reaches_a_robot():
+    """The window substitutes the standard greetings before it gets here, so
+    an empty list arriving means something upstream went wrong -- and a robot
+    that sees people and says nothing is indistinguishable from a broken one.
+    """
+    fake = FakeRobot()
+    plan = Plan(package_dir=str(REPO), phrases=[], weights_dir=str(REPO))
+    outcome = Deployment(fake, plan).run()
+
+    assert not outcome.ok
+    assert fake.calls == [], '不该连机器人'

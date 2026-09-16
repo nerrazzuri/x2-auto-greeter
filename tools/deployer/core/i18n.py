@@ -73,6 +73,28 @@ STRINGS: Dict[str, Dict[str, str]] = {
     'phrases.more': {'zh': '(还有 {count} 处)', 'en': ' (and {count} more)'},
     'phrases.can_fix': {'zh': '　可以点「自动修正」', 'en': '  — press “Fix automatically”'},
 
+    'phrases.will_use_standard': {
+        'zh': '未填写问候语。直接点「开始部署」会使用内置的通用问候语。',
+        'en': 'No greetings written. Pressing Deploy will use the built-in '
+              'standard greetings.'},
+    'phrases.standard_title': {
+        'zh': '使用通用问候语?', 'en': 'Use the standard greetings?'},
+    'phrases.standard_body': {
+        'zh': '你还没有填写问候语。机器人将使用内置的 {count} 句通用问候语,'
+              '每次随机挑一句,例如:',
+        'en': 'You have not written any greetings. The robot will use the '
+              '{count} built-in standard greetings, picking one at random '
+              'each time. For example:'},
+    'phrases.standard_use': {'zh': '就用通用的', 'en': 'Use the standard ones'},
+    'phrases.standard_write': {'zh': '我要自己写', 'en': 'Let me write my own'},
+    'phrases.standard_chosen': {
+        'zh': '使用内置的 {count} 句通用问候语',
+        'en': 'Using the {count} built-in standard greetings'},
+    'phrases.none_title': {'zh': '没有问候语', 'en': 'No greetings'},
+    'phrases.none_body': {
+        'zh': '请先填写至少一句问候语,否则机器人看到人也不会说话。',
+        'en': 'Write at least one greeting first, or the robot will see people '
+              'and say nothing.'},
     'weights.ready': {'zh': '✓ 识别模型已就绪:{path}', 'en': '✓ Vision model ready: {path}'},
     'weights.missing': {
         'zh': '识别模型还没下载。机器人靠它认出人;缺了会看不清。'

@@ -41,13 +41,6 @@ def window(app):
 GOOD = ['Welcome to KL Gateway Mall!', "Hi! I'm X2."]
 
 
-def test_an_empty_list_cannot_be_deployed(window):
-    """A robot with no greetings is a robot that stands there silently, and
-    the customer would have no way to tell that from a broken one."""
-    assert not window.deploy_button.isEnabled()
-    assert '一句' in window.problems.text()
-
-
 def test_a_clean_list_enables_the_button_and_says_how_many(window):
     window._set_rows(GOOD)
     assert window.deploy_button.isEnabled()
@@ -212,3 +205,87 @@ def test_switching_language_keeps_what_the_customer_typed(app, monkeypatch):
         assert fresh.deploy_button.text() == 'Deploy'
     finally:
         i18n.set_language(before)
+
+
+# -- the standard greetings are a fallback, not a draft ----------------------
+#
+# Pre-filling the table with them would let someone edit them, deploy, and
+# believe the result was their own writing. They stay out of the table; an
+# empty table means "use the standard ones", and the customer is asked first.
+
+def test_the_table_starts_empty(app):
+    window = Deployer()
+    try:
+        assert window._rows() == []
+    finally:
+        window.deleteLater()
+
+
+def test_an_empty_table_is_offered_rather_than_refused(app):
+    """Not an error to be corrected: it is the default, and the button says so
+    instead of greying out with no explanation."""
+    window = Deployer()
+    try:
+        assert window.deploy_button.isEnabled()
+        assert '通用' in window.problems.text()
+    finally:
+        window.deleteLater()
+
+
+def test_deploying_an_empty_table_asks_first(app, monkeypatch):
+    """Greeting a customer's visitors in words they never saw is not something
+    to do quietly."""
+    window = Deployer()
+    try:
+        asked = {}
+
+        def fake_exec(box):
+            asked['text'] = box.text()
+            asked['detail'] = box.informativeText()
+            asked['buttons'] = [b.text() for b in box.buttons()]
+            box.setResult(0)
+
+        monkeypatch.setattr('PyQt6.QtWidgets.QMessageBox.exec', fake_exec)
+        monkeypatch.setattr(
+            'PyQt6.QtWidgets.QMessageBox.clickedButton', lambda _self: None)
+
+        window._deploy()
+
+        assert asked, '应该先问'
+        assert '通用' in asked['text']
+        assert asked['detail'].count('·') >= 3, '要给出具体会说什么'
+        assert len(asked['buttons']) == 2
+    finally:
+        window.deleteLater()
+
+
+def test_declining_the_standard_greetings_deploys_nothing(app, monkeypatch):
+    window = Deployer()
+    try:
+        monkeypatch.setattr('PyQt6.QtWidgets.QMessageBox.exec', lambda _s: 0)
+        monkeypatch.setattr(
+            'PyQt6.QtWidgets.QMessageBox.clickedButton', lambda _s: None)
+        started = []
+        monkeypatch.setattr(window, '_start', lambda worker: started.append(worker))
+
+        window._deploy()
+        assert started == [], '客户说要自己写,就不该开始部署'
+        assert window.deploy_button.isEnabled(), '按钮要还能再点'
+    finally:
+        window.deleteLater()
+
+
+def test_the_standard_greetings_are_venue_neutral():
+    """The KL Gateway Mall list names a mall and a company; handing those to a
+    different customer would be worse than handing them nothing."""
+    from deployer.core import phrases as P
+
+    joined = ' '.join(P.defaults())
+    assert joined, '内置问候语必须存在'
+    assert 'KL Gateway' not in joined and 'Always Robot' not in joined
+
+
+def test_the_standard_greetings_pass_their_own_checks():
+    from deployer.core import phrases as P
+
+    assert P.check(P.defaults()) == []

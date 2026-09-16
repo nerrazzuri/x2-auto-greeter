@@ -61,10 +61,29 @@ def _package() -> list:
     the robot. Everything meant for the robot lives under payload/, and
     nothing else does.
     """
-    package = REPO / 'x2_greeter_ws'
+    package = _clean_copy(REPO / 'x2_greeter_ws')
     tools = REPO / 'tools' / 'deploy'
     return [f'--add-data={package}{SEPARATOR}payload/x2_greeter_ws',
             f'--add-data={tools}{SEPARATOR}payload/tools/deploy']
+
+
+def _clean_copy(source: Path) -> Path:
+    """The package without the build droppings.
+
+    --add-data takes a directory as it finds it, so a stale __pycache__ or
+    .pytest_cache is baked into the executable and then uploaded to every
+    robot. Compiled bytecode from the build machine's Python is worse than
+    useless on the robot -- it is a file the robot will happily import.
+    """
+    import shutil
+    import tempfile
+
+    staged = Path(tempfile.mkdtemp(prefix='x2-payload-')) / source.name
+    shutil.copytree(
+        source, staged,
+        ignore=shutil.ignore_patterns('__pycache__', '*.pyc', '*.pyo',
+                                      '.pytest_cache', 'build', 'install', 'log'))
+    return staged
 
 
 def main() -> int:

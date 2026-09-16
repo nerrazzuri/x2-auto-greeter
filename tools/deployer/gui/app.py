@@ -359,6 +359,15 @@ class Deployer(QWidget):
             item.setBackground(QColor('#f7ece2') if bad else QColor(0, 0, 0, 0))
         self.table.blockSignals(False)
 
+        if not [r for r in rows if r.strip()]:
+            # Empty is allowed, and means the standard greetings. It is not a
+            # mistake to be corrected -- it is the default, and the deploy
+            # button says so before acting on it.
+            self.problems.setText(t('phrases.will_use_standard'))
+            self.problems.setStyleSheet(f'color: {WAIT_GREY};')
+            self.deploy_button.setEnabled(True)
+            return
+
         if not problems:
             count = len([r for r in rows if r.strip()])
             self.problems.setText(t('phrases.all_good', count=count))
@@ -372,8 +381,7 @@ class Deployer(QWidget):
             self.problems.setText(f'{head}{more}{tip}')
             self.problems.setStyleSheet(f'color: {FAIL_RED};')
 
-        self.deploy_button.setEnabled(
-            not any(not p.fixable for p in problems) and bool(rows))
+        self.deploy_button.setEnabled(not any(not p.fixable for p in problems))
 
     # -- weights ----------------------------------------------------------
 
@@ -450,6 +458,12 @@ class Deployer(QWidget):
             QMessageBox.warning(self, t('weights.needed'), t('weights.needed_body'))
             return
 
+        phrases = P.apply_fixes(self._rows())
+        if not phrases:
+            phrases = self._confirm_standard_greetings()
+            if phrases is None:
+                return
+
         self.deploy_button.setEnabled(False)
         self.result.setText('')
         self.progress.setValue(0)
@@ -458,7 +472,7 @@ class Deployer(QWidget):
 
         robot = Robot(DEFAULT_HOST, DEFAULT_USER, DEFAULT_PASSWORD)
         plan = Plan(package_dir=str(PACKAGE_ROOT),
-                    phrases=P.apply_fixes(self._rows()),
+                    phrases=phrases,
                     weights_dir=self._weights_dir,
                     venue=self.venue.text().strip(),
                     install_service=self.autostart.isChecked(),
@@ -469,6 +483,41 @@ class Deployer(QWidget):
         worker.done.connect(self._on_done)
         self._say(t('deploy.begin'))
         self._start(worker)
+
+    def _confirm_standard_greetings(self):
+        """Ask before greeting a customer's visitors in words they never saw.
+
+        The standard list is a fallback, not a draft: pre-filling the table
+        with it would let someone edit it, deploy, and believe the result was
+        their own writing. Leaving the table empty and asking here keeps the
+        two apart -- and the question names three of the lines, because
+        "standard greetings" tells nobody what the robot will actually say.
+
+        Returns the greetings to deploy, or None if the customer would rather
+        write their own first.
+        """
+        standard = P.defaults()
+        if not standard:
+            QMessageBox.warning(self, t('phrases.none_title'),
+                                t('phrases.none_body'))
+            return None
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle(t('phrases.standard_title'))
+        box.setText(t('phrases.standard_body', count=len(standard)))
+        box.setInformativeText('\n'.join(f'· {line}' for line in standard[:3])
+                               + '\n· …')
+        use = box.addButton(t('phrases.standard_use'),
+                            QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(t('phrases.standard_write'),
+                      QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+
+        if box.clickedButton() is not use:
+            return None
+        self._say(t('phrases.standard_chosen', count=len(standard)))
+        return standard
 
     def _on_event(self, event: Event) -> None:
         if event.status is Status.RUNNING:
