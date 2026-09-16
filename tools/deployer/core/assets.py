@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional
 
+from .i18n import t
+
 PROTOTXT = 'MobileNetSSD_deploy.prototxt'
 CAFFEMODEL = 'MobileNetSSD_deploy.caffemodel'
 NAMES = (PROTOTXT, CAFFEMODEL)
@@ -119,13 +121,11 @@ def download(on_progress: Optional[Callable[[str, int], None]] = None,
         try:
             _fetch(URLS[name], destination, name, on_progress)
         except Exception as exc:                        # noqa: BLE001
-            raise RuntimeError(
-                f'下载识别模型失败({name})。请确认这台电脑能上网,'
-                f'或者在有网的地方先下载一次。') from exc
+            raise RuntimeError(t('err.download', name=name)) from exc
 
     bad = verify(target)
     if bad:
-        raise RuntimeError(f'下载的识别模型文件校验不通过:{", ".join(bad)}')
+        raise RuntimeError(t('err.checksum', names=', '.join(bad)))
     return str(target)
 
 

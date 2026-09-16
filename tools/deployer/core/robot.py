@@ -28,6 +28,8 @@ from typing import Callable, Iterable, List, Optional, Tuple
 
 import paramiko
 
+from .i18n import t
+
 ROOT = '/home/run/x2_greeter'
 SHARE = f'{ROOT}/ws/install/x2_greeter/share/x2_greeter/config'
 
@@ -55,7 +57,8 @@ class Identity:
     hostname: str
 
     def __str__(self) -> str:
-        return f'{self.hostname} · 序列号 {self.serial} · {self.mac}'
+        return t('robot.identity', host=self.hostname,
+                 serial=self.serial, mac=self.mac)
 
 
 @dataclass(frozen=True)
@@ -98,11 +101,9 @@ class Robot:
                            look_for_keys=False)
         except paramiko.AuthenticationException as exc:
             raise RobotError(
-                f'{self.user}@{self.host} 的密码不对。X2 出厂密码是 "1"。') from exc
+                t('err.password', user=self.user, host=self.host)) from exc
         except OSError as exc:
-            raise RobotError(
-                f'连不上 {self.host}。请检查网线是否插好,以及本机的有线网口地址'
-                f'是不是 10.0.1.x/24。') from exc
+            raise RobotError(t('err.unreachable', host=self.host)) from exc
         self._client = client
 
     def close(self) -> None:
@@ -124,7 +125,7 @@ class Robot:
 
     def run(self, command: str, timeout: Optional[float] = 120.0) -> Result:
         if self._client is None:
-            raise RobotError('还没有连接到机器人')
+            raise RobotError(t('err.not_connected'))
         _stdin, stdout, stderr = self._client.exec_command(command, timeout=timeout)
         out = stdout.read().decode('utf-8', 'replace')
         err = stderr.read().decode('utf-8', 'replace')
@@ -138,7 +139,7 @@ class Robot:
         mixed into the output the customer is shown.
         """
         if self._client is None:
-            raise RobotError('还没有连接到机器人')
+            raise RobotError(t('err.not_connected'))
         wrapped = f"sudo -S -p '' {command}"
         stdin, stdout, stderr = self._client.exec_command(wrapped, timeout=timeout)
         stdin.write(self._password + '\n')
@@ -147,7 +148,7 @@ class Robot:
         err = stderr.read().decode('utf-8', 'replace')
         code = stdout.channel.recv_exit_status()
         if code != 0 and 'incorrect password' in err.lower():
-            raise RobotError('sudo 密码不对,装不了开机自启。')
+            raise RobotError(t('err.sudo'))
         return Result(code, out, err)
 
     # -- identity -------------------------------------------------------------
@@ -166,7 +167,7 @@ class Robot:
             "ip -brief link show develop0 | awk '{print $3}'").out.strip()
         hostname = self.run('hostname').out.strip()
         if not serial:
-            raise RobotError('读不到机器人的板子序列号,这可能不是一台 X2。')
+            raise RobotError(t('err.not_an_x2'))
         return Identity(serial=serial, mac=mac, hostname=hostname)
 
     # -- files ----------------------------------------------------------------
@@ -175,7 +176,7 @@ class Robot:
     def sftp(self) -> paramiko.SFTPClient:
         if self._sftp is None:
             if self._client is None:
-                raise RobotError('还没有连接到机器人')
+                raise RobotError(t('err.not_connected'))
             self._sftp = self._client.open_sftp()
         return self._sftp
 

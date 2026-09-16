@@ -28,7 +28,10 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
-NAME = 'X2部署工具'
+# Named for the platform it runs on, not for the product: the two files end up
+# side by side in one folder when both are built, and a customer picking the
+# wrong one gets a file that will not open with no clue why.
+NAME = '部署工具-Windows' if platform.system() == 'Windows' else '部署工具-Linux'
 
 WINDOWS = platform.system() == 'Windows'
 SEPARATOR = ';' if WINDOWS else ':'          # PyInstaller's --add-data syntax

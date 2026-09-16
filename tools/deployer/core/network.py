@@ -19,6 +19,8 @@ import socket
 from dataclasses import dataclass
 from typing import Optional
 
+from .i18n import t
+
 SSH_PORT = 22
 
 
@@ -68,20 +70,9 @@ def same_subnet(local: str, host: str, prefix: int = 24) -> bool:
 def fix_instructions(host: str) -> str:
     """What to do about it, in the words of the machine the customer is on."""
     suggested = _suggest_address(host)
-    if platform.system() == 'Windows':
-        return (f'请把有线网卡的 IP 设为固定地址:\n'
-                f'  控制面板 → 网络和 Internet → 网络连接\n'
-                f'  右键「以太网」→ 属性 → Internet 协议版本 4 (TCP/IPv4) → 属性\n'
-                f'  选「使用下面的 IP 地址」,填:\n'
-                f'    IP 地址   {suggested}\n'
-                f'    子网掩码  255.255.255.0\n'
-                f'  网关和 DNS 留空。')
-    return (f'请把有线网卡的 IP 设为固定地址:\n'
-            f'  设置 → 网络 → 有线 → 齿轮图标 → IPv4\n'
-            f'  选「手动」,填:\n'
-            f'    地址    {suggested}\n'
-            f'    子网掩码 255.255.255.0\n'
-            f'  网关留空。')
+    key = ('net.fix_windows' if platform.system() == 'Windows'
+           else 'net.fix_linux')
+    return t(key, address=suggested)
 
 
 def _suggest_address(host: str) -> str:
@@ -98,15 +89,13 @@ def check(host: str, timeout: float = 3.0) -> Reachability:
     local = route_address(host)
 
     if port_open(host, timeout=timeout):
-        return Reachability(True, local, f'已连接到 {host}')
+        return Reachability(True, local, t('net.connected', host=host))
 
     if local is None or not same_subnet(local, host):
-        where = f'(本机当前地址 {local})' if local else ''
+        where = t('net.here', address=local) if local else ''
         return Reachability(
             False, local,
-            f'这台电脑不在机器人所在的网段 {where}。\n{fix_instructions(host)}')
+            t('net.wrong_subnet', where=where, fix=fix_instructions(host)))
 
     return Reachability(
-        False, local,
-        f'本机地址 {local} 在正确的网段上,但 {host} 没有回应。\n'
-        f'请检查网线两头是否都插好,以及机器人是否已经开机。')
+        False, local, t('net.silent', address=local, host=host))

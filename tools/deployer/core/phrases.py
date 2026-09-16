@@ -25,6 +25,8 @@ from typing import List, Optional, Sequence
 
 import yaml
 
+from .i18n import t
+
 # The vendor TTS reads punctuation it does not recognise out loud rather than
 # skipping it, so a curly quote pasted from Word becomes an audible stumble in
 # a shopping mall. Each is mapped to what the customer meant.
@@ -55,11 +57,16 @@ class Problem:
 
     line: int                  # 1-based, as shown in the editor
     text: str
-    message: str
+    key: str                   # an i18n key, not a sentence -- see i18n.py
+    params: dict
     fixable: bool              # True when apply_fixes() can repair it
 
+    @property
+    def message(self) -> str:
+        return t(self.key, **self.params)
+
     def __str__(self) -> str:
-        return f'第 {self.line} 句:{self.message}'
+        return t('problem.line', line=self.line, message=self.message)
 
 
 def _clean(text: str) -> str:
@@ -74,41 +81,38 @@ def check(phrases: Sequence[str]) -> List[Problem]:
     seen = {}
 
     if not [p for p in phrases if p.strip()]:
-        return [Problem(0, '', '一句问候语都没有,机器人不会说话', False)]
+        return [Problem(0, '', 'problem.empty_list', {}, False)]
 
     for index, raw in enumerate(phrases, start=1):
         text = raw.strip()
         if not text:
-            problems.append(Problem(index, raw, '这一行是空的', True))
+            problems.append(Problem(index, raw, 'problem.blank', {}, True))
             continue
 
         bad = sorted({c for c in text if c in SUBSTITUTIONS})
         if bad:
             problems.append(Problem(
-                index, raw,
-                f'含有 TTS 读不出的字符 {" ".join(bad)},多半是从 Word 粘贴来的',
-                True))
+                index, raw, 'problem.bad_chars', {'chars': ' '.join(bad)}, True))
 
         if LEADING_NUMBER.match(raw):
             problems.append(Problem(
-                index, raw, '开头的编号会被一起念出来', True))
+                index, raw, 'problem.numbering', {}, True))
 
         markup = sorted(set(MARKUP.findall(text)))
         if markup:
             problems.append(Problem(
-                index, raw,
-                f'含有会被念出来的符号 {" ".join(markup)}', False))
+                index, raw, 'problem.markup',
+                {'chars': ' '.join(markup)}, False))
 
         if len(text) > MAX_CHARS:
             problems.append(Problem(
-                index, raw,
-                f'太长了({len(text)} 字,上限 {MAX_CHARS}),说完人已经走了',
-                False))
+                index, raw, 'problem.too_long',
+                {'length': len(text), 'limit': MAX_CHARS}, False))
 
         key = text.lower()
         if key in seen:
             problems.append(Problem(
-                index, raw, f'和第 {seen[key]} 句重复', False))
+                index, raw, 'problem.duplicate', {'line': seen[key]}, False))
         else:
             seen[key] = index
 
@@ -137,14 +141,8 @@ SETTINGS_KEYS = {'backend', 'camera', 'speech', 'presence', 'detect', 'gestures'
 def _wrong_file(path: str, document) -> str:
     name = os.path.basename(path)
     if isinstance(document, dict) and SETTINGS_KEYS & set(document):
-        return (f'{name} 是部署设置文件,不是问候语。'
-                f'问候语文件的名字通常以 phrases- 开头,'
-                f'例如 phrases-klgw.yaml。')
-    return (f'{name} 里没有问候语。问候语文件应该是这样的:\n'
-            f'phrases:\n'
-            f'  - "第一句"\n'
-            f'  - "第二句"\n'
-            f'也可以直接用记事本写一个 .txt,一句一行。')
+        return t('problem.not_greetings', name=name)
+    return t('problem.no_phrases', name=name)
 
 
 def load(path) -> List[str]:
@@ -164,8 +162,7 @@ def load(path) -> List[str]:
         items = document.get('phrases') or []
         if not isinstance(items, list):
             raise ValueError(
-                f'{os.path.basename(path)} 里的 "phrases:" 下面应该是一句一行的'
-                f'列表,现在不是。')
+                t('problem.phrases_not_list', name=os.path.basename(path)))
         return [str(item).strip() for item in items if str(item).strip()]
 
     return [line.strip() for line in raw.splitlines()

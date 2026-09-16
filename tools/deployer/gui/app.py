@@ -31,6 +31,8 @@ from PyQt6.QtWidgets import (
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from deployer.core import assets, network, phrases as P             # noqa: E402
+from deployer.core.i18n import (LANGUAGES, language, set_language, t,  # noqa: E402
+                                use_system_language)
 from deployer.core.deployment import Deployment, Event, Plan, Status  # noqa: E402
 from deployer.core.robot import (                                   # noqa: E402
     DEFAULT_HOST, DEFAULT_PASSWORD, DEFAULT_USER, Robot, RobotError)
@@ -114,13 +116,14 @@ class DeployWorker(QObject):
 class Deployer(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('X2 迎宾部署')
+        self.setWindowTitle(t('app.title'))
         self.resize(820, 900)
         self._thread: Optional[QThread] = None
         self._weights_dir: Optional[str] = None
 
         layout = QVBoxLayout(self)
         layout.setSpacing(14)
+        layout.addLayout(self._language_row())
         layout.addWidget(self._robot_box())
         layout.addWidget(self._phrases_box(), stretch=1)
         layout.addWidget(self._deploy_box())
@@ -131,6 +134,47 @@ class Deployer(QWidget):
 
     # -- sections ---------------------------------------------------------
 
+    def _language_row(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.language_button = QPushButton(t('app.language'))
+        self.language_button.setFlat(True)
+        self.language_button.setMaximumWidth(110)
+        self.language_button.clicked.connect(self._switch_language)
+        row.addWidget(self.language_button)
+        return row
+
+    def _switch_language(self) -> None:
+        """Swap languages by building a fresh window.
+
+        Qt cannot retranslate text that was set from a plain string, and
+        walking every widget to reassign it is how half a window ends up in
+        one language and half in the other. The greetings, the venue and the
+        log are carried across, because losing a customer's typing to a
+        button they pressed out of curiosity would be unforgivable.
+        """
+        other = LANGUAGES[(LANGUAGES.index(language()) + 1) % len(LANGUAGES)]
+        carried = (self._rows(), self.venue.text(), self.log.toPlainText(),
+                   self.identity.text(), self.autostart.isChecked())
+        set_language(other)
+
+        fresh = Deployer()
+        fresh._set_rows(carried[0])
+        fresh.venue.setText(carried[1])
+        if carried[2]:
+            fresh.log.setPlainText(carried[2])
+        fresh.identity.setText(carried[3])
+        fresh.autostart.setChecked(carried[4])
+        fresh.resize(self.size())
+        fresh.move(self.pos())
+        fresh.show()
+
+        # Held on the application so it is not collected the moment this
+        # window closes and drops the last reference to it.
+        QApplication.instance()._deployer_window = fresh
+        self.close()
+
+
     def _robot_box(self) -> QGroupBox:
         """No address, user or password to fill in.
 
@@ -140,37 +184,37 @@ class Deployer(QWidget):
         connect needs to know what was tried, and telling them to check the
         cable is more use than a text box.
         """
-        box = QGroupBox('1 · 机器人')
+        box = QGroupBox(t('section.robot'))
         outer = QVBoxLayout(box)
 
         line = QHBoxLayout()
-        self.detect_button = QPushButton('检测机器人')
+        self.detect_button = QPushButton(t('robot.detect'))
         self.detect_button.clicked.connect(self._detect)
-        self.identity = QLabel('把网线插到机器人上,然后点「检测机器人」。')
+        self.identity = QLabel(t('robot.prompt'))
         self.identity.setWordWrap(True)
         self.identity.setStyleSheet(f'color: {WAIT_GREY};')
         line.addWidget(self.detect_button)
         line.addWidget(self.identity, stretch=1)
         outer.addLayout(line)
 
-        target = QLabel(f'连接目标 {DEFAULT_HOST} · 用户 {DEFAULT_USER}')
+        target = QLabel(t('robot.target', host=DEFAULT_HOST, user=DEFAULT_USER))
         target.setStyleSheet(f'color: {WAIT_GREY}; font-size: 11px;')
         outer.addWidget(target)
         return box
 
     def _phrases_box(self) -> QGroupBox:
-        box = QGroupBox('2 · 问候语')
+        box = QGroupBox(t('section.phrases'))
         outer = QVBoxLayout(box)
 
         top = QHBoxLayout()
         self.venue = QLineEdit()
-        self.venue.setPlaceholderText('场地名称,例如:KL Gateway Mall(可留空)')
-        top.addWidget(QLabel('场地'))
+        self.venue.setPlaceholderText(t('phrases.venue_hint'))
+        top.addWidget(QLabel(t('phrases.venue')))
         top.addWidget(self.venue, stretch=1)
         outer.addLayout(top)
 
         self.table = QTableWidget(0, 1)
-        self.table.setHorizontalHeaderLabels(['机器人会说的话(每行一句,随机挑一句)'])
+        self.table.setHorizontalHeaderLabels([t('phrases.column')])
         self.table.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.ResizeMode.Stretch)
         self.table.verticalHeader().setDefaultSectionSize(26)
@@ -178,12 +222,12 @@ class Deployer(QWidget):
         outer.addWidget(self.table, stretch=1)
 
         buttons = QHBoxLayout()
-        for text, slot in (('加一句', self._add_row),
-                           ('删除选中', self._delete_rows),
-                           ('打开问候语文件', self._import),
-                           ('自动修正', self._autofix),
-                           ('保存到文件', self._export)):
-            button = QPushButton(text)
+        for key, slot in (('phrases.add', self._add_row),
+                          ('phrases.delete', self._delete_rows),
+                          ('phrases.open', self._import),
+                          ('phrases.fix', self._autofix),
+                          ('phrases.save', self._export)):
+            button = QPushButton(t(key))
             button.clicked.connect(slot)
             buttons.addWidget(button)
         buttons.addStretch(1)
@@ -195,23 +239,23 @@ class Deployer(QWidget):
         return box
 
     def _deploy_box(self) -> QGroupBox:
-        box = QGroupBox('3 · 部署')
+        box = QGroupBox(t('section.deploy'))
         outer = QVBoxLayout(box)
 
         row = QHBoxLayout()
         self.weights_label = QLabel()
         self.weights_label.setWordWrap(True)
-        self.download_button = QPushButton('下载识别模型')
+        self.download_button = QPushButton(t('weights.download'))
         self.download_button.clicked.connect(self._download)
         row.addWidget(self.weights_label, stretch=1)
         row.addWidget(self.download_button)
         outer.addLayout(row)
 
-        self.autostart = QCheckBox('机器人开机后自动运行(推荐)')
+        self.autostart = QCheckBox(t('deploy.autostart'))
         self.autostart.setChecked(True)
         outer.addWidget(self.autostart)
 
-        self.deploy_button = QPushButton('开始部署')
+        self.deploy_button = QPushButton(t('deploy.start'))
         self.deploy_button.setMinimumHeight(44)
         font = QFont(self.deploy_button.font())
         font.setPointSize(font.pointSize() + 2)
@@ -222,7 +266,7 @@ class Deployer(QWidget):
 
         self.progress = QProgressBar()
         self.progress.setTextVisible(True)
-        self.progress.setFormat('尚未开始')
+        self.progress.setFormat(t('deploy.idle'))
         outer.addWidget(self.progress)
 
         self.result = QLabel()
@@ -231,7 +275,7 @@ class Deployer(QWidget):
         return box
 
     def _log_box(self) -> QGroupBox:
-        box = QGroupBox('过程记录')
+        box = QGroupBox(t('section.log'))
         outer = QVBoxLayout(box)
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
@@ -272,34 +316,34 @@ class Deployer(QWidget):
         # phrases.load() names it rather than talking about sections.
         start = PACKAGE_ROOT / 'x2_greeter_ws' / 'src' / 'x2_greeter' / 'config'
         path, _ = QFileDialog.getOpenFileName(
-            self, '打开问候语文件',
+            self, t('phrases.open_title'),
             str(start if start.is_dir() else Path.home()),
-            '问候语 (phrases*.yaml *.txt);;所有文件 (*)')
+            t('phrases.filter'))
         if not path:
             return
         try:
             self._set_rows(P.load(path))
-            self._say(f'已导入 {self.table.rowCount()} 句:{path}')
+            self._say(t('phrases.opened', count=self.table.rowCount(), path=path))
         except Exception as exc:                         # noqa: BLE001
             box = QMessageBox(self)
             box.setIcon(QMessageBox.Icon.Warning)
-            box.setWindowTitle('这个文件不是问候语')
+            box.setWindowTitle(t('phrases.not_greetings'))
             box.setText(str(exc))
             box.exec()
-            self._say(f'打开失败:{exc}')
+            self._say(t('phrases.open_failed', error=exc))
 
     def _export(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
-            self, '保存问候语', 'phrases.yaml', '问候语文件 (*.yaml)')
+            self, t('phrases.save_title'), 'phrases.yaml', t('phrases.filter_save'))
         if not path:
             return
         P.save(path, P.apply_fixes(self._rows()), venue=self.venue.text().strip())
-        self._say(f'已保存:{path}')
+        self._say(t('phrases.saved', path=path))
 
     def _autofix(self) -> None:
         before = self._rows()
         self._set_rows(P.apply_fixes(before))
-        self._say(f'自动修正:{len(before)} 句 → {self.table.rowCount()} 句')
+        self._say(t('phrases.fixed', before=len(before), after=self.table.rowCount()))
 
     def _revalidate(self) -> None:
         rows = self._rows()
@@ -317,13 +361,14 @@ class Deployer(QWidget):
 
         if not problems:
             count = len([r for r in rows if r.strip()])
-            self.problems.setText(f'✓ {count} 句,没有问题。')
+            self.problems.setText(t('phrases.all_good', count=count))
             self.problems.setStyleSheet(f'color: {OK_GREEN};')
         else:
             fixable = sum(1 for p in problems if p.fixable)
             head = '；'.join(str(p) for p in problems[:3])
-            more = f'(还有 {len(problems) - 3} 处)' if len(problems) > 3 else ''
-            tip = '　可以点「自动修正」' if fixable else ''
+            more = (t('phrases.more', count=len(problems) - 3)
+                    if len(problems) > 3 else '')
+            tip = t('phrases.can_fix') if fixable else ''
             self.problems.setText(f'{head}{more}{tip}')
             self.problems.setStyleSheet(f'color: {FAIL_RED};')
 
@@ -336,13 +381,11 @@ class Deployer(QWidget):
         found = assets.locate()
         self._weights_dir = found.directory
         if found.ready:
-            self.weights_label.setText(f'✓ 识别模型已就绪:{found.directory}')
+            self.weights_label.setText(t('weights.ready', path=found.directory))
             self.weights_label.setStyleSheet(f'color: {OK_GREEN};')
             self.download_button.setEnabled(False)
         else:
-            self.weights_label.setText(
-                '识别模型还没下载。机器人靠它认出人;缺了会看不清。'
-                '请在能上网时点右边下载一次,以后就不用了。')
+            self.weights_label.setText(t('weights.missing'))
             self.weights_label.setStyleSheet(f'color: {FAIL_RED};')
             self.download_button.setEnabled(True)
 
@@ -350,21 +393,22 @@ class Deployer(QWidget):
         self.download_button.setEnabled(False)
         worker = DownloadWorker()
         def downloading(name: str, percent: int) -> None:
-            self.progress.setFormat(f'下载 {name} {percent}%')
+            self.progress.setFormat(
+                t('weights.downloading', name=name, percent=percent))
             self.progress.setValue(percent)
 
         worker.progress.connect(downloading)
 
         def finished(directory: str, error: str) -> None:
             if error:
-                self._say(f'下载失败:{error}')
-                QMessageBox.warning(self, '下载失败', error)
+                self._say(t('weights.download_failed', error=error))
+                QMessageBox.warning(self, t('weights.download_failed_title'), error)
                 self.download_button.setEnabled(True)
             else:
-                self._say(f'识别模型已下载到 {directory}')
+                self._say(t('weights.downloaded', path=directory))
             self._find_weights()
             self.progress.setValue(0)
-            self.progress.setFormat('尚未开始')
+            self.progress.setFormat(t('deploy.idle'))
 
         worker.done.connect(finished)
         self._start(worker)
@@ -373,7 +417,7 @@ class Deployer(QWidget):
 
     def _detect(self) -> None:
         self.detect_button.setEnabled(False)
-        self.identity.setText('正在连接…')
+        self.identity.setText(t('robot.connecting'))
         self.identity.setStyleSheet(f'color: {WAIT_GREY};')
         worker = DetectWorker(DEFAULT_HOST, DEFAULT_USER, DEFAULT_PASSWORD)
 
@@ -383,18 +427,18 @@ class Deployer(QWidget):
                 first, _, rest = error.partition('\n')
                 self.identity.setText(first)
                 self.identity.setStyleSheet(f'color: {FAIL_RED};')
-                self._say(f'检测失败:{error}')
+                self._say(t('phrases.open_failed', error=error))
                 if rest:
                     box = QMessageBox(self)
                     box.setIcon(QMessageBox.Icon.Information)
-                    box.setWindowTitle('连不上机器人')
+                    box.setWindowTitle(t('robot.cannot_connect'))
                     box.setText(first)
                     box.setInformativeText(rest)
                     box.exec()
             else:
                 self.identity.setText(f'✓ {identity}')
                 self.identity.setStyleSheet(f'color: {OK_GREEN};')
-                self._say(f'已连接:{identity}')
+                self._say(t('net.connected', host=str(identity)))
 
         worker.done.connect(finished)
         self._start(worker)
@@ -403,8 +447,7 @@ class Deployer(QWidget):
 
     def _deploy(self) -> None:
         if not self._weights_dir:
-            QMessageBox.warning(self, '还不能部署',
-                                '请先下载识别模型,机器人需要它来认出人。')
+            QMessageBox.warning(self, t('weights.needed'), t('weights.needed_body'))
             return
 
         self.deploy_button.setEnabled(False)
@@ -424,7 +467,7 @@ class Deployer(QWidget):
         worker = DeployWorker(robot, plan)
         worker.event.connect(self._on_event)
         worker.done.connect(self._on_done)
-        self._say('—— 开始部署 ——')
+        self._say(t('deploy.begin'))
         self._start(worker)
 
     def _on_event(self, event: Event) -> None:
@@ -445,19 +488,16 @@ class Deployer(QWidget):
         self.deploy_button.setEnabled(True)
         if outcome.ok:
             self.progress.setValue(100)
-            self.progress.setFormat('完成')
-            self.result.setText(
-                '✓ 部署完成,机器人已经开始工作。\n'
-                f'机器人:{outcome.identity}\n'
-                f'实际运行:{outcome.startup_line}')
+            self.progress.setFormat(t('deploy.done'))
+            self.result.setText(t('deploy.success', identity=outcome.identity,
+                                  startup=outcome.startup_line))
             self.result.setStyleSheet(f'color: {OK_GREEN};')
-            self._say('—— 完成 ——')
+            self._say(t('deploy.finished'))
         else:
-            self.progress.setFormat('未完成')
-            self.result.setText(
-                '✗ 没有部署成功。下面「过程记录」的最后一行说明了原因。')
+            self.progress.setFormat(t('deploy.failed'))
+            self.result.setText(t('deploy.failure'))
             self.result.setStyleSheet(f'color: {FAIL_RED};')
-            self._say('—— 未完成 ——')
+            self._say(t('deploy.unfinished'))
 
     # -- plumbing ---------------------------------------------------------
 
@@ -484,7 +524,10 @@ class Deployer(QWidget):
 
 def main() -> int:
     app = QApplication(sys.argv)
-    app.setApplicationName('X2 迎宾部署')
+    # Chinese for a Chinese system, English for anything else, before the
+    # window is built -- every label is read once, at construction.
+    use_system_language()
+    app.setApplicationName(t('app.title'))
     window = Deployer()
     window.show()
     return app.exec()

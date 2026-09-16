@@ -25,6 +25,7 @@ from enum import Enum
 from typing import Callable, List, Optional, Sequence
 
 from . import phrases as phrases_mod
+from .i18n import t
 from .robot import ROOT, SHARE, Identity, Robot, RobotError
 
 LOG = f'{ROOT}/greeter.log'
@@ -112,7 +113,7 @@ class Deployment:
         problems = phrases_mod.check(self.plan.phrases)
         blocking = [str(p) for p in problems if not p.fixable]
         if blocking:
-            self._emit('检查问候语', Status.FAILED, blocking[0])
+            self._emit(t('step.check'), Status.FAILED, blocking[0])
             return Outcome(ok=False, problems=blocking)
 
         def connect() -> str:
@@ -121,17 +122,17 @@ class Deployment:
             return str(outcome.identity)
 
         steps = [
-            ('连接机器人', connect),
-            ('上传程序', self._upload_package),
-            ('上传识别模型', self._upload_weights),
-            ('编译', self._build),
-            ('写入问候语和配置', self._configure),
+            (t('step.connect'), connect),
+            (t('step.upload'), self._upload_package),
+            (t('step.weights'), self._upload_weights),
+            (t('step.build'), self._build),
+            (t('step.configure'), self._configure),
         ]
         if self.plan.install_service:
-            steps.append(('设置开机自启', self._install_service))
+            steps.append((t('step.service'), self._install_service))
         if self.plan.start_after:
-            steps.append(('启动机器人程序', self._start))
-            steps.append(('确认机器人已就绪', self._verify))
+            steps.append((t('step.start'), self._start))
+            steps.append((t('step.verify'), self._verify))
 
         for name, work in steps:
             if not self._step(name, work):
@@ -145,7 +146,7 @@ class Deployment:
 
     def _upload_package(self) -> str:
         sent = self.robot.mirror(self.plan.package_dir, REPO)
-        return f'{sent} 个文件'
+        return t('step.files', count=sent)
 
     def _upload_weights(self) -> str:
         import os
@@ -154,12 +155,11 @@ class Deployment:
         missing = [n for n in names
                    if not os.path.isfile(os.path.join(self.plan.weights_dir, n))]
         if missing:
-            raise RobotError(
-                '缺少识别模型文件,机器人会看不清人。请在有网络的地方先下载一次。')
+            raise RobotError(t('err.no_weights'))
         for name in names:
             self.robot.put(os.path.join(self.plan.weights_dir, name),
                            posixpath.join(MODELS, name))
-        return '2 个文件'
+        return t('step.files', count=len(names))
 
     def _build(self) -> str:
         # `source` then `;` not `&&`: an environment script's exit status
@@ -172,8 +172,9 @@ class Deployment:
             f'cd {ROOT}/ws && colcon build --packages-select x2_greeter 2>&1 | tail -3',
             timeout=600)
         if not result.ok or 'Summary: 1 package finished' not in result.out:
-            raise RobotError(f'编译失败。{result.out.strip() or result.err.strip()}')
-        return '完成'
+            raise RobotError(t('err.build',
+                                detail=result.out.strip() or result.err.strip()))
+        return t('step.build_done')
 
     def _configure(self) -> str:
         """Seed site.yaml if absent, then write the phrases and the settings.
@@ -187,7 +188,7 @@ class Deployment:
             f'[ -f {SITE} ] || {{ cp {shipped} {SITE} && '
             f'sed -i "s|^      model_dir: \'\'|      model_dir: {MODELS}|" {SITE}; }}')
         if not self.robot.exists(SITE):
-            raise RobotError('生成配置文件失败,可能是编译没有真正完成。')
+            raise RobotError(t('err.no_site'))
 
         target = f'{ROOT}/phrases.yaml'
         self.robot.put_text(
@@ -195,7 +196,8 @@ class Deployment:
 
         applied = _apply_site(self.robot.read_text(SITE), target)
         self.robot.put_text(applied, SITE)
-        return f'{len(phrases_mod.apply_fixes(self.plan.phrases))} 句问候语'
+        return t('step.phrase_count',
+                 count=len(phrases_mod.apply_fixes(self.plan.phrases)))
 
     def _install_service(self) -> str:
         unit = self.robot.read_text(f'{REPO}/tools/deploy/{UNIT}')
@@ -209,8 +211,8 @@ class Deployment:
                         f'systemctl enable {UNIT}'):
             result = self.robot.sudo(command)
             if not result.ok:
-                raise RobotError(f'装开机自启失败:{result.err.strip()}')
-        return '开机后会自动运行'
+                raise RobotError(t('err.service', detail=result.err.strip()))
+        return t('step.autostart_on')
 
     def _start(self) -> str:
         # restart, not start: `start` on a service that is already running does
@@ -218,8 +220,8 @@ class Deployment:
         # while reporting success.
         result = self.robot.sudo(f'systemctl restart {UNIT}', timeout=60)
         if not result.ok:
-            raise RobotError(f'启动失败:{result.err.strip()}')
-        return '已启动'
+            raise RobotError(t('err.start', detail=result.err.strip()))
+        return t('step.started')
 
     _startup_line: Optional[str] = None
 
@@ -237,17 +239,17 @@ class Deployment:
             if found:
                 line = found.group(1).strip()
                 self._startup_line = line
-                wrong = [f'{key} 应为 {want},实际是 {_field(line, key)}'
+                wrong = [t('err.wrong_field', key=key, want=want,
+                           got=_field(line, key) or '?')
                          for key, want in WANTED.items()
                          if _field(line, key) != want]
                 if wrong:
-                    raise RobotError('机器人起来了,但配置不对:' + ';'.join(wrong))
+                    raise RobotError(
+                        t('err.wrong_config', detail='; '.join(wrong)))
                 return line
-            self._emit('确认机器人已就绪', Status.INFO, '等待相机启动…')
+            self._emit(t('step.verify'), Status.INFO, t('step.waiting_camera'))
             time.sleep(POLL_S)
-        raise RobotError(
-            '机器人程序启动了,但两分钟内没有报告就绪。多半是机器人自己的相机'
-            '软件还没起来,可以稍后再试一次。')
+        raise RobotError(t('err.never_ready'))
 
 
 def _field(line: str, key: str) -> str:
@@ -314,4 +316,4 @@ def _set_in_block(lines: List[str], block: str, key: str, value: str) -> List[st
         pad = ' ' * (child if child is not None else base + 2)
         lines.insert(i + 1, f'{pad}{key}: {value}\n')
         return lines
-    raise RobotError(f'配置文件里找不到 "{block}:" 这一段,机器人上的程序可能不完整。')
+    raise RobotError(t('err.no_block', block=block))

@@ -145,3 +145,56 @@ def test_unfrozen_the_package_root_is_the_repository():
 
     assert (app.PACKAGE_ROOT / 'x2_greeter_ws').is_dir()
     assert (app.PACKAGE_ROOT / 'tools' / 'deploy').is_dir()
+
+
+# -- the translation table ---------------------------------------------------
+
+def test_every_string_exists_in_both_languages():
+    """A key with only one language silently falls back to Chinese, which an
+    English-speaking customer reads as the window half-translating itself."""
+    from deployer.core import i18n
+
+    missing = [f'{key}.{lang}' for key, entry in i18n.STRINGS.items()
+               for lang in i18n.LANGUAGES if not entry.get(lang)]
+    assert missing == []
+
+
+def test_both_languages_take_the_same_parameters():
+    """A parameter present in one language and not the other formats fine and
+    then shows a sentence with a hole in it."""
+    import re
+    from deployer.core import i18n
+
+    fields = lambda text: set(re.findall(r'\{(\w+)\}', text))   # noqa: E731
+    for key, entry in i18n.STRINGS.items():
+        assert fields(entry['zh']) == fields(entry['en']), key
+
+
+def test_a_message_may_have_a_parameter_called_key():
+    """err.wrong_field does. Naming it collided with t()'s own argument and
+    replaced the explanation with a TypeError."""
+    from deployer.core import i18n
+
+    rendered = i18n.t('err.wrong_field', key='backend', want='canned', got='claude')
+    assert 'backend' in rendered and 'canned' in rendered and 'claude' in rendered
+
+
+def test_an_unknown_key_shows_the_key_rather_than_raising():
+    """A customer halfway through a deployment is better served by seeing
+    `step.upload` than by the window closing."""
+    from deployer.core import i18n
+
+    assert i18n.t('no.such.key') == 'no.such.key'
+
+
+def test_switching_language_changes_what_comes_out():
+    from deployer.core import i18n
+
+    before = i18n.language()
+    try:
+        i18n.set_language('zh')
+        chinese = i18n.t('deploy.start')
+        i18n.set_language('en')
+        assert i18n.t('deploy.start') != chinese
+    finally:
+        i18n.set_language(before)

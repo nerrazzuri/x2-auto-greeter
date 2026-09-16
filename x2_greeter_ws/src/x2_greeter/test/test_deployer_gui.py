@@ -121,3 +121,94 @@ def test_success_reports_what_the_robot_says_it_is_running(window):
     window._on_done(_Outcome())
     assert 'camera=stereo' in window.result.text()
     assert 'backend=canned' in window.result.text()
+
+
+# -- two languages -----------------------------------------------------------
+
+def test_the_window_opens_in_whichever_language_is_set(app):
+    from deployer.core import i18n
+
+    before = i18n.language()
+    try:
+        i18n.set_language('en')
+        english = Deployer()
+        assert english.deploy_button.text() == 'Deploy'
+        assert '**' not in english.problems.text()
+        english.deleteLater()
+
+        i18n.set_language('zh')
+        chinese = Deployer()
+        assert chinese.deploy_button.text() == '开始部署'
+        chinese.deleteLater()
+    finally:
+        i18n.set_language(before)
+
+
+def test_the_validation_message_follows_the_language(app):
+    from deployer.core import i18n
+
+    before = i18n.language()
+    try:
+        for code, expected in (('en', 'greetings'), ('zh', '句')):
+            i18n.set_language(code)
+            window = Deployer()
+            window._set_rows(GOOD)
+            assert expected in window.problems.text(), code
+            window.deleteLater()
+    finally:
+        i18n.set_language(before)
+
+
+def test_a_failure_is_reported_in_the_language_in_force(app):
+    """The message a customer needs most is the one they must be able to
+    read."""
+    from deployer.core import i18n
+
+    class _Outcome:
+        ok = False
+        identity = None
+        startup_line = ''
+
+    before = i18n.language()
+    try:
+        i18n.set_language('en')
+        window = Deployer()
+        window._on_done(_Outcome())
+        assert 'Progress' in window.result.text()
+        assert '过程记录' not in window.result.text()
+        window.deleteLater()
+    finally:
+        i18n.set_language(before)
+
+
+def test_switching_language_keeps_what_the_customer_typed(app, monkeypatch):
+    """Losing a list of greetings to a button pressed out of curiosity would
+    be unforgivable, so the new window inherits them."""
+    from deployer.core import i18n
+
+    before = i18n.language()
+    try:
+        i18n.set_language('zh')
+        window = Deployer()
+        window._set_rows(GOOD)
+        window.venue.setText('Somewhere Mall')
+        window._say('一行记录')
+
+        created = {}
+        real = Deployer
+
+        def capture():
+            created['window'] = real()
+            return created['window']
+
+        monkeypatch.setattr('deployer.gui.app.Deployer', capture)
+        window._switch_language()
+
+        fresh = created['window']
+        assert i18n.language() == 'en'
+        assert fresh._rows() == GOOD
+        assert fresh.venue.text() == 'Somewhere Mall'
+        assert '一行记录' in fresh.log.toPlainText()
+        assert fresh.deploy_button.text() == 'Deploy'
+    finally:
+        i18n.set_language(before)
