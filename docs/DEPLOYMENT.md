@@ -8,6 +8,65 @@ If you are an agent doing this for the first time, read
 [`AGENT_BRINGUP_GUIDE.md`](AGENT_BRINGUP_GUIDE.md) first — it covers what this
 runbook assumes: the architecture, the untested assumptions, and the known gaps.
 
+## 0. The whole deployment, in one command
+
+From a laptop that can reach the robot, with the repository checked out:
+
+```bash
+python3 tools/fetch_model.py --dest ~/x2-models          # once per laptop
+bash tools/deploy/install.sh run@10.0.1.41 \
+     --models ~/x2-models --site klgw --service --start
+```
+
+That copies the repository to `/home/run/x2_greeter`, builds it there, seeds
+`site.yaml`, applies the site profile, installs the systemd unit so the greeter
+comes back after a reboot, and starts it. It will prompt once for the robot's
+sudo password, and once more for SSH if the deploying key is not installed yet.
+
+It writes nothing outside `/home/run/x2_greeter`, and
+`tools/deploy/uninstall.sh` removes the lot.
+
+**`--site NAME`** applies `tools/deploy/sites/NAME.yaml` on top of the seeded
+`site.yaml`: the handful of values that differ for one deployment, kept in
+version control instead of typed into an editor on site. `klgw` is KL Gateway
+Mall — the client's own phrase list, the head stereo pair, no cloud backend.
+Run without `--site` to deploy the shipped defaults. An unknown name fails
+before anything is copied, and lists the profiles that do exist.
+
+Per-robot values stay per-robot: `site.yaml` is seeded once and never
+overwritten by a later install, so `camera.rotate_180` and anything else proven
+on one machine survives a redeploy.
+
+Confirm it came up — the startup line names what is actually in force, not what
+the file says:
+
+```bash
+ssh run@10.0.1.41 'grep -a "x2_greeter up:" /home/run/x2_greeter/greeter.log | tail -1'
+```
+
+```
+x2_greeter up: detector=MobileNetSsdDetector camera=stereo backend=canned gestures=11 speech_tier=tts
+```
+
+Day to day, on the robot:
+
+| | |
+|---|---|
+| pause it (returns at the next boot) | `sudo systemctl stop x2-greeter` |
+| turn it off for good | `sudo systemctl disable --now x2-greeter` |
+| turn it back on | `sudo systemctl enable --now x2-greeter` |
+| is it on? | `systemctl is-enabled x2-greeter; systemctl is-active x2-greeter` |
+
+Do not stop it with `pkill` or `bin/stop.sh`: the unit restarts on failure, so
+a killed process is back thirty seconds later.
+
+Stopping the greeter needs nothing else undone — Phase 1 never changes the
+vendor agent's run mode, so the robot's own interaction is unaffected either
+way.
+
+The sections below are the by-hand route: what `install.sh` does, for a robot
+being brought up for the first time or a step that needs unpicking.
+
 ## 1. Prerequisites on PC2
 
 ```bash

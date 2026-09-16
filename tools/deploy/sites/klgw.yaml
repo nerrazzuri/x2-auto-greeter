@@ -1,0 +1,33 @@
+# KL Gateway Mall. Applied to a robot's site.yaml by install.sh --site klgw.
+#
+# Only the keys that differ from the shipped greeter.yaml belong here. Every
+# other value -- the detection gates, the safety interlocks, the timings tuned
+# on hardware -- stays where it is documented, in greeter.yaml, and is not
+# repeated or shadowed by this file.
+#
+# @SHARE@ is replaced with the installed package's config directory.
+#
+# Deliberately NOT here: camera.rotate_180. Whether the chin module is mounted
+# upside down is a property of one robot, not of this deployment, and it has
+# no effect at all while camera.source is stereo. It stays a per-robot value
+# that tools/check_camera_orientation.py answers.
+
+backend:
+  # No cloud call, so no ANTHROPIC_API_KEY and no per-greeting latency: the
+  # phrases below are the whole vocabulary. The client supplied the script.
+  provider: canned
+
+camera:
+  # The head stereo pair, with the chin module's depth reprojected into it.
+  # Phase 1 measured the difference: a person at 1.5 m passed the distance
+  # gate on 26% of chin-module frames and was greeted after 5.1 s; the head
+  # pair saw the same person at 0.94-1.00 confidence and greeted in 1.0 s.
+  source: stereo
+
+speech:
+  phrases_file: '@SHARE@/phrases-klgw.yaml'
+  # tts, not auto. `auto` demotes to the recordings on PC3 after repeated TTS
+  # failures, and those were recorded from config/phrases.yaml -- so a demoted
+  # robot would start saying lines that are not in the client's script.
+  # Silence is the better failure here.
+  tier: tts

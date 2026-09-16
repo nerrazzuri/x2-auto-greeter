@@ -1,0 +1,38 @@
+# Greeting phrases for the KL Gateway Mall deployment, from the client's own
+# script: ten "KLGW Mall" lines, then ten "Always Robots" lines, in the order
+# the document lists them.
+#
+# Client copy, so it is transcribed rather than edited. Changed only for what
+# a TTS engine cannot read: curly quotes made straight, the one em dash made a
+# comma, and "ALways" written "Always". The wording is otherwise exactly as
+# supplied -- including "Always Robot" (singular) in the first ten and "Always
+# Robots" in the second ten, which is the client's own inconsistency and not
+# ours to correct.
+#
+# Unlike config/phrases.yaml, order is NOT load-bearing here: no recordings
+# were ever made from this list (the deployment runs speech.tier: tts for that
+# reason), so lines may be reordered or removed freely.
+#
+# One is picked at random per greeting, and speech.wake_invitations appends a
+# second sentence to each. See cognition/canned.py.
+phrases:
+  - "Hello! Welcome to KL Gateway Mall. I hope you're having a lovely day! If you're curious about robots like me, you can find more of us at Always Robot."
+  - "Hi there! How's your day going at KL Gateway Mall? I'm one of the robots from Always Robot. It's nice to meet you!"
+  - "Hello! Welcome to KL Gateway Mall. Have you ever met a humanoid robot before? If not, well... now you have! I'm from Always Robot."
+  - "Hi! I hope you're enjoying your time at KL Gateway Mall. Feel free to say hello or have a little chat with me. I'm here with Always Robot!"
+  - "Hello! It's a pleasure to meet you here at KL Gateway Mall. I'm from Always Robot, and I'm always happy to make a new human friend!"
+  - "Hi there! What brings you to KL Gateway Mall today, shopping, food, or just exploring? I'm here representing Always Robot, so feel free to chat with me!"
+  - "Hi there! Have you ever wondered what it's like to talk to a humanoid robot? Give it a try! I'm here at KL Gateway Mall with Always Robot."
+  - "Hello! Welcome to KL Gateway Mall. Robots might look futuristic, but we're already here! You can discover a little more about us at Always Robot."
+  - "Hi! I hope your visit to KL Gateway Mall is going well. If you're interested in technology, robotics, or just something different, we might have something interesting for you at Always Robot."
+  - "Hello there! I'm one of the robots from Always Robot. While you're here at KL Gateway Mall, feel free to stop for a chat. I promise I don't bite!"
+  - "Hi there! I'm X2 from Always Robots. Welcome to KL Gateway Mall!"
+  - "Hello! I'm X2, your friendly robot from Always Robots. Welcome!"
+  - "Hi everyone! Welcome to KL Gateway Mall. I'm X2 from Always Robots!"
+  - "Hello there! Nice to meet you. I'm X2 from Always Robots!"
+  - "Hi! I'm X2, a robot from Always Robots. Come and meet me at UG!"
+  - "Welcome to KL Gateway Mall! I'm X2 from Always Robots. Nice to meet you!"
+  - "Hello! I'm X2 from Always Robots. If you're interested, visit us at UG!"
+  - "Hi friends! I'm X2 from Always Robots. Come say hello when you're at UG!"
+  - "Hello everyone! I'm X2, here from Always Robots. Welcome to the mall!"
+  - "Hi there! I'm X2 from Always Robots. Interested in robots? Visit us at UG!"
