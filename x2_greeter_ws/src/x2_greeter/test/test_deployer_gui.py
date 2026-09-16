@@ -527,10 +527,18 @@ def test_deploying_offers_the_two_outcomes_rather_than_a_checkbox(app):
     window = Deployer(watch_robot=False)
     try:
         assert not hasattr(window, 'autostart'), '复选框应该没有了'
-        titles = [a.text() for a in window.deploy_button.menu().actions()]
-        assert len(titles) == 2
-        assert any('开机' in x or 'boots' in x for x in titles)
-        assert any('这一次' in x or 'once' in x for x in titles)
+        actions = window.deploy_button.menu().actions()
+        assert len(actions) == 2
+
+        # Short enough to scan...
+        for action in actions:
+            assert len(action.text()) <= 20, action.text()
+        # ...with what it means still reachable.
+        tips = ' '.join(a.toolTip() for a in actions)
+        assert '开机' in tips or 'boots' in tips
+        assert '关机' in tips or 'powered off' in tips
+        assert window.deploy_button.menu().toolTipsVisible(), \
+            'Qt 默认不显示菜单项的悬停说明'
     finally:
         window.deleteLater()
 

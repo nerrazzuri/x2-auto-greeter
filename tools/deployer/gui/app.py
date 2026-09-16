@@ -397,10 +397,15 @@ class Deployer(QWidget):
         font.setBold(True)
         self.deploy_button.setFont(font)
         menu = QMenu(self)
-        self.autostart_action = menu.addAction(t('deploy.with_autostart'))
+        self.autostart_action = menu.addAction(t('deploy.permanent'))
+        self.autostart_action.setToolTip(t('deploy.permanent_why'))
         self.autostart_action.triggered.connect(lambda: self._deploy(True))
         self.once_action = menu.addAction(t('deploy.once'))
+        self.once_action.setToolTip(t('deploy.once_why'))
         self.once_action.triggered.connect(lambda: self._deploy(False))
+        # Qt hides action tooltips in menus unless asked; the label is short
+        # on purpose and the consequence has to be reachable.
+        menu.setToolTipsVisible(True)
         self.deploy_button.setMenu(menu)
         outer.addWidget(self.deploy_button)
 

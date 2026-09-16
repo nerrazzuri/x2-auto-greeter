@@ -146,12 +146,17 @@ STRINGS: Dict[str, Dict[str, str]] = {
         'zh': '请先下载识别模型,机器人需要它来认出人。',
         'en': 'Download the vision model first — the robot needs it to see people.'},
 
-    'deploy.with_autostart': {
-        'zh': '部署,并让机器人每次开机自动运行(推荐)',
-        'en': 'Deploy, and start it every time the robot boots (recommended)'},
-    'deploy.once': {
-        'zh': '只部署这一次(机器人关机后就不再运行)',
-        'en': 'Deploy once (stops when the robot is powered off)'},
+    # Short enough to scan, with the consequence on hover. The long form --
+    # "Deploy, and start it every time the robot boots" -- was a sentence in a
+    # place people read as a label.
+    'deploy.permanent': {'zh': '永久部署', 'en': 'Deploy permanently'},
+    'deploy.permanent_why': {
+        'zh': '机器人每次开机都会自动运行迎宾程序。',
+        'en': 'The greeter starts every time the robot boots.'},
+    'deploy.once': {'zh': '单次部署', 'en': 'Deploy once'},
+    'deploy.once_why': {
+        'zh': '机器人这次会运行,但关机后就不再运行了。',
+        'en': 'It runs now, but stops once the robot is powered off.'},
     'deploy.start': {'zh': '开始部署', 'en': 'Deploy'},
     'deploy.idle': {'zh': '尚未开始', 'en': 'Not started'},
     'deploy.begin': {'zh': '—— 开始部署 ——', 'en': '—— Deploying ——'},
