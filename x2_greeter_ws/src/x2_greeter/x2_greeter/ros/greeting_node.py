@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 import rclpy
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
+from rclpy.exceptions import ParameterUninitializedException
 from rclpy.node import Node
 
 from x2_greeter.cognition.canned import DEFAULT_PHRASES, CannedBackend, load_phrases
@@ -107,7 +108,15 @@ class GreetingNode(Node):
         rng = random.Random()
         self._rng = rng
         self._invitations = tuple(self._param('speech.wake_invitations'))
-        self._walking_gestures = tuple(self._param('gestures.enabled_while_walking'))
+        # Read through the guard: greeter.yaml ships this as `[]`, and an
+        # empty sequence in a params file gives rclpy no element type to
+        # infer, so the parameter stays uninitialised and get_parameter()
+        # raises rather than returning []. Every site.yaml is seeded from
+        # that file, so this killed the node during construction on the first
+        # launch on a fresh robot (2026-09-11). Empty is the intended value --
+        # no gestures while walking -- so an uninitialised read means exactly
+        # that. See test/ros/test_params_file.py.
+        self._walking_gestures = self._list_param('gestures.enabled_while_walking')
         self.selector = GestureSelector(
             enabled=list(self._param('gestures.enabled')),
             hand_preference=self._param('gestures.hand_preference'),
@@ -274,6 +283,21 @@ class GreetingNode(Node):
 
     def _param(self, name: str):
         return self.get_parameter(name).value
+
+    def _list_param(self, name: str) -> tuple:
+        """A list parameter that may legitimately be empty, as a tuple.
+
+        An empty list is not a missing value here, but rclpy cannot tell them
+        apart: it infers a parameter's type from the value it is given, an
+        empty YAML sequence carries no element type, and the parameter is left
+        uninitialised. Treating that as the empty list is the only reading
+        that matches what the file says.
+        """
+        try:
+            value = self._param(name)
+        except ParameterUninitializedException:
+            return ()
+        return tuple(value or ())
 
     # -------------------------------------------------------------- backends
 
