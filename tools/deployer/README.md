@@ -8,7 +8,7 @@
 
 **方式一:双击可执行文件**(推荐,客户什么都不用装)
 
-仓库根目录下的 `部署工具-Linux` 或 `部署工具-Windows.exe`,双击即可。Python、所有依赖库、识别模型都打在里面了。
+仓库根目录下的 `X2AutoGreeter-Linux` 或 `X2AutoGreeter-Windows.exe`,双击即可。Python、所有依赖库、识别模型都打在里面了。
 
 **方式二:双击启动脚本**(需要电脑上有 Python)
 

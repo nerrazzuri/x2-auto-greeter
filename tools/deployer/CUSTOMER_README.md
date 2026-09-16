@@ -11,8 +11,8 @@ Nothing else needs to be installed.
 
 | 你的电脑 / Your computer | 下载 / Download |
 |---|---|
-| Windows | `部署工具-Windows.exe` |
-| Linux | `部署工具-Linux` |
+| Windows | `X2AutoGreeter-Windows.exe` |
+| Linux | `X2AutoGreeter-Linux` |
 
 ---
 
@@ -20,7 +20,7 @@ Nothing else needs to be installed.
 
 Windows 对所有从网上下载的新程序都会这样提示,不代表程序有问题。
 
-1. 双击 `部署工具-Windows.exe`
+1. 双击 `X2AutoGreeter-Windows.exe`
 2. 出现「**Windows 已保护你的电脑**」时,点左下角的「**更多信息**」
 3. 再点出现的「**仍要运行**」
 
@@ -31,7 +31,7 @@ Windows 对所有从网上下载的新程序都会这样提示,不代表程序�
 Windows shows this for every new program downloaded from the internet. It does
 not mean anything is wrong with the file.
 
-1. Double-click `部署工具-Windows.exe`
+1. Double-click `X2AutoGreeter-Windows.exe`
 2. When **“Windows protected your PC”** appears, click **More info**
 3. Then click **Run anyway**
 
@@ -46,8 +46,8 @@ If your antivirus blocks it, add the file to its allowed list.
 或者在终端里:
 
 ```bash
-chmod +x 部署工具-Linux
-./部署工具-Linux
+chmod +x X2AutoGreeter-Linux
+./X2AutoGreeter-Linux
 ```
 
 ### Linux: allow it to run

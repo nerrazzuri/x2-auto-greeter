@@ -17,7 +17,7 @@ git pull
 python3 tools/deployer/build.py
 ```
 
-产出在仓库根目录:`部署工具-Linux` 或 `部署工具-Windows.exe`。
+产出在仓库根目录:`X2AutoGreeter-Linux` 或 `X2AutoGreeter-Windows.exe`。
 
 编译前确认识别模型在本机——`python3 tools/fetch_model.py --dest ~/x2-models` 跑过一次即可。**模型会被打进可执行文件**,这样客户在没有外网的现场也能部署。构建脚本会打印是否打包了模型,留意那一行。
 
@@ -32,8 +32,8 @@ git push origin v1.0.0
 
 GitHub → Releases → Draft a new release → 选刚才的 tag,上传:
 
-- `部署工具-Windows.exe`
-- `部署工具-Linux`
+- `X2AutoGreeter-Windows.exe`
+- `X2AutoGreeter-Linux`
 
 说明正文用 `CUSTOMER_README.md` 的内容,客户在下载页就能看到该怎么用、以及 Windows 那个安全警告怎么过。
 

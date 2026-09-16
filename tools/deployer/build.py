@@ -28,10 +28,13 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
-# Named for the platform it runs on, not for the product: the two files end up
-# side by side in one folder when both are built, and a customer picking the
-# wrong one gets a file that will not open with no clue why.
-NAME = '部署工具-Windows' if platform.system() == 'Windows' else '部署工具-Linux'
+# Named for the product and the platform, in ASCII. The platform because the
+# two files end up side by side in one folder and a customer picking the wrong
+# one gets a file that will not open with no clue why. ASCII because GitHub
+# strips non-ASCII from release asset names without saying so: `部署工具-Linux`
+# was uploaded and came back as `default.-Linux`, which tells a customer
+# nothing and, on Windows, is one step from losing the .exe as well.
+NAME = f'X2AutoGreeter-{"Windows" if platform.system() == "Windows" else "Linux"}'
 
 WINDOWS = platform.system() == 'Windows'
 SEPARATOR = ';' if WINDOWS else ':'          # PyInstaller's --add-data syntax
