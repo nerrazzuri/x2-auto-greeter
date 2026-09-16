@@ -34,6 +34,7 @@ from PyQt6.QtWidgets import (
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from deployer.core import assets, logbook, phrases as P, watch      # noqa: E402
+from deployer.gui import robot_art                                  # noqa: E402
 from deployer.core.i18n import (LANGUAGES, language, set_language, t,  # noqa: E402
                                 use_system_language)
 from deployer.core.deployment import (Deployment, Event, Plan,       # noqa: E402
@@ -57,6 +58,7 @@ def _package_root() -> Path:
 PACKAGE_ROOT = _package_root()
 
 INK = '#1d252b'
+ACCENT = '#0f6d78'
 OK_GREEN = '#2c6a45'
 FAIL_RED = '#a6332a'
 AMBER = '#9c6b1a'
@@ -181,6 +183,7 @@ class Deployer(QWidget):
 
         left = QVBoxLayout()
         left.setSpacing(12)
+        left.addWidget(self._masthead())
         left.addWidget(self._robot_box())
         left.addWidget(self._deploy_box())
         left.addStretch(1)
@@ -206,6 +209,10 @@ class Deployer(QWidget):
 
         self._fix_text = ''
         self._robot_ready = False
+        # While a deployment runs, the watcher keeps polling but says nothing:
+        # its lines every ten seconds would interleave with the steps the
+        # customer is actually watching, and the lamp belongs to the outcome.
+        self._deploying = False
         self._watching = watch_robot
         # Owned by the window, not by the thread: _on_status is a slot and can
         # be driven without a watcher running behind it.
@@ -216,6 +223,39 @@ class Deployer(QWidget):
             self._start_watching()
 
     # -- sections ---------------------------------------------------------
+
+    def _masthead(self) -> QWidget:
+        """The product, drawn, above the panel about network addresses.
+
+        The left column ran out of content halfway down and the window read as
+        unfinished. This is the one place a picture belongs: it says what the
+        program is for before a word is read.
+        """
+        card = QWidget()
+        row = QHBoxLayout(card)
+        row.setContentsMargins(4, 0, 4, 0)
+        row.setSpacing(12)
+
+        art = QLabel()
+        art.setPixmap(robot_art.greeter(96, 88, ink=ACCENT, accent=OK_GREEN))
+        row.addWidget(art)
+
+        words = QVBoxLayout()
+        words.setSpacing(2)
+        title = QLabel(t('app.title'))
+        title_font = QFont(title.font())
+        title_font.setPointSize(title_font.pointSize() + 3)
+        title_font.setBold(True)
+        title.setFont(title_font)
+        subtitle = QLabel(t('app.tagline'))
+        subtitle.setWordWrap(True)
+        subtitle.setStyleSheet(f'color: {WAIT_GREY};')
+        words.addStretch(1)
+        words.addWidget(title)
+        words.addWidget(subtitle)
+        words.addStretch(1)
+        row.addLayout(words, stretch=1)
+        return card
 
     def _header_row(self) -> QHBoxLayout:
         """Language, and a menu for everything that is not one of the steps.
@@ -602,6 +642,11 @@ class Deployer(QWidget):
         thread.start()
 
     def _on_status(self, status) -> None:
+        self._robot_ready = status.ready
+        self.uninstall_action.setEnabled(status.ready and not self._deploying)
+        if self._deploying:
+            return
+
         colours = {watch.NO_LINK: WAIT_GREY, watch.WRONG_SUBNET: FAIL_RED,
                    watch.NO_SSH: AMBER, watch.READY: OK_GREEN}
         colour = colours.get(status.state, WAIT_GREY)
@@ -618,8 +663,6 @@ class Deployer(QWidget):
         self._fix_text = status.detail
         self.fix_button.setVisible(not status.ready)
 
-        self._robot_ready = status.ready
-        self.uninstall_action.setEnabled(status.ready)
         if self._throttle.should_log(status):
             kinds = {watch.READY: 'ok', watch.WRONG_SUBNET: 'fail',
                      watch.NO_SSH: 'warn'}
@@ -657,6 +700,11 @@ class Deployer(QWidget):
             if phrases is None:
                 return
 
+        self._deploying = True
+        self.lamp.setStyleSheet(f'color: {AMBER}; font-size: 20px;')
+        self.identity.setText(t('deploy.running'))
+        self.identity.setStyleSheet(f'color: {AMBER};')
+        self.fix_button.hide()
         self.deploy_button.setEnabled(False)
         self.result.setText('')
         self.progress.setValue(0)
@@ -724,6 +772,7 @@ class Deployer(QWidget):
         if box.clickedButton() is not remove:
             return
 
+        self._deploying = True
         self.deploy_button.setEnabled(False)
         self.result.setText('')
         self.progress.setValue(0)
@@ -736,6 +785,7 @@ class Deployer(QWidget):
         self._start(worker)
 
     def _on_uninstalled(self, outcome) -> None:
+        self._deploying = False
         self.deploy_button.setEnabled(True)
         ok = bool(getattr(outcome, 'ok', False))
         self.progress.setValue(100 if ok else self.progress.value())
@@ -761,7 +811,12 @@ class Deployer(QWidget):
             self._say(f'✗ {event.step} — {event.message}', 'fail')
 
     def _on_done(self, outcome) -> None:
+        self._deploying = False
         self.deploy_button.setEnabled(True)
+        colour = OK_GREEN if outcome.ok else FAIL_RED
+        self.lamp.setStyleSheet(f'color: {colour}; font-size: 20px;')
+        self.identity.setText(t('deploy.lamp_ok' if outcome.ok else 'deploy.lamp_failed'))
+        self.identity.setStyleSheet(f'color: {colour};')
         if outcome.ok:
             self.progress.setValue(100)
             self.progress.setFormat(t('deploy.done'))
@@ -822,7 +877,10 @@ def main() -> int:
     use_system_language()
     app.setApplicationName(t('app.title'))
     window = Deployer()
-    window.show()
+    # Maximised, not true fullscreen: fullscreen takes the title bar with it,
+    # and a customer who cannot find the close button is worse off than one
+    # with a small window.
+    window.showMaximized()
     return app.exec()
 
 

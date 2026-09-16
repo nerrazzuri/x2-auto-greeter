@@ -28,6 +28,11 @@ STRINGS: Dict[str, Dict[str, str]] = {
         'en': 'X2 Greeter Deployment'},
     'app.language': {'zh': 'English', 'en': '中文'},
     'app.more': {'zh': '更多操作', 'en': 'More actions'},
+    'app.tagline': {
+        'zh': '把迎宾程序装到 X2 上', 'en': 'Set up the greeter on an X2'},
+    'deploy.running': {'zh': '正在部署…', 'en': 'Deploying…'},
+    'deploy.lamp_ok': {'zh': '部署成功', 'en': 'Deployed'},
+    'deploy.lamp_failed': {'zh': '部署失败', 'en': 'Deployment failed'},
 
     'section.robot': {'zh': '1 · 机器人', 'en': '1 · Robot'},
     'section.phrases': {'zh': '2 · 问候语', 'en': '2 · Greetings'},

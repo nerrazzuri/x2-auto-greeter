@@ -21,9 +21,9 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 REPO = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(REPO / 'tools'))
 
-from PyQt6.QtWidgets import QApplication            # noqa: E402
+from PyQt6.QtWidgets import QApplication, QLabel    # noqa: E402
 
-from deployer.gui.app import Deployer               # noqa: E402
+from deployer.gui.app import Deployer, FAIL_RED, OK_GREEN  # noqa: E402
 
 
 @pytest.fixture(scope='module')
@@ -566,5 +566,79 @@ def test_the_choice_reaches_the_plan(app, monkeypatch):
         window._deploy(True)
         window._deploy(False)
         assert [p.install_service for p in plans] == [True, False]
+    finally:
+        window.deleteLater()
+
+
+# -- while a deployment is running -------------------------------------------
+
+def test_the_watcher_goes_quiet_during_a_deployment(app):
+    """Its lines every ten seconds would interleave with the steps the
+    customer is actually watching."""
+    from deployer.core import watch
+
+    window = Deployer(watch_robot=False)
+    try:
+        window._deploying = True
+        for _ in range(3):
+            window._on_status(watch.Status(watch.WRONG_SUBNET, '网段不对'))
+        assert '网段不对' not in log_text(window)
+
+        window._deploying = False
+        window._on_status(watch.Status(watch.WRONG_SUBNET, '网段不对'))
+        assert '网段不对' in log_text(window), '部署结束后要恢复'
+    finally:
+        window.deleteLater()
+
+
+def test_the_lamp_reports_the_outcome_of_the_deployment(app):
+    """Green or red where the customer is already looking, rather than one
+    line among thirty in the log."""
+    class _Outcome:
+        def __init__(self, ok):
+            self.ok = ok
+            self.identity = 'agi'
+            self.startup_line = 'camera=stereo'
+
+    window = Deployer(watch_robot=False)
+    try:
+        window._on_done(_Outcome(True))
+        assert OK_GREEN in window.lamp.styleSheet()
+        green_words = window.identity.text()
+
+        window._on_done(_Outcome(False))
+        assert FAIL_RED in window.lamp.styleSheet()
+        assert window.identity.text() != green_words
+    finally:
+        window.deleteLater()
+
+
+def test_uninstall_is_not_offered_mid_deployment(app):
+    from deployer.core import watch
+
+    window = Deployer(watch_robot=False)
+    try:
+        window._deploying = True
+        window._on_status(watch.Status(watch.READY, '好了', 'agi'))
+        assert not window.uninstall_action.isEnabled()
+    finally:
+        window.deleteLater()
+
+
+def test_the_window_has_a_picture_of_what_it_deploys(app):
+    """The left column ran out of content halfway down and the window read as
+    unfinished. Drawn, not shipped: an image file would have to survive
+    PyInstaller and be found again from inside the bundle."""
+    from deployer.gui import robot_art
+
+    art = robot_art.greeter(96, 88)
+    assert not art.isNull()
+    assert art.width() == 96 and art.height() == 88
+
+    window = Deployer(watch_robot=False)
+    try:
+        labels = window.findChildren(QLabel)
+        assert any(l.pixmap() is not None and not l.pixmap().isNull()
+                   for l in labels), '窗口里应该有那张图'
     finally:
         window.deleteLater()
