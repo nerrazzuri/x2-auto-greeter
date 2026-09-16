@@ -41,6 +41,12 @@ def window(app):
 GOOD = ['Welcome to KL Gateway Mall!', "Hi! I'm X2."]
 
 
+def log_text(window) -> str:
+    """Everything in the progress list, as one string."""
+    return '\n'.join(window.log.item(i).text()
+                     for i in range(window.log.count()))
+
+
 def test_a_clean_list_enables_the_button_and_says_how_many(window):
     window._set_rows(GOOD)
     assert window.deploy_button.isEnabled()
@@ -201,7 +207,7 @@ def test_switching_language_keeps_what_the_customer_typed(app, monkeypatch):
         assert i18n.language() == 'en'
         assert fresh._rows() == GOOD
         assert fresh.venue.text() == 'Somewhere Mall'
-        assert '一行记录' in fresh.log.toPlainText()
+        assert '一行记录' in log_text(fresh)
         assert fresh.deploy_button.text() == 'Deploy'
     finally:
         i18n.set_language(before)
@@ -397,7 +403,7 @@ def test_the_same_news_does_not_fill_the_log(app):
         window._throttle = watch.Throttle(repeat_s=1000)
         for _ in range(10):
             window._on_status(watch.Status(watch.NO_LINK, '没有网线'))
-        assert window.log.toPlainText().count('没有网线') == 1
+        assert log_text(window).count('没有网线') == 1
     finally:
         window.deleteLater()
 
@@ -442,13 +448,31 @@ def test_uninstalling_asks_first_and_says_what_goes(app, monkeypatch):
         window.deleteLater()
 
 
-def test_the_uninstall_button_is_not_next_to_the_one_people_want(app):
-    """It is needed rarely and it destroys work. A flat button off to one side
-    is hard to press by accident; a second big button is not."""
+def test_uninstall_is_not_one_of_the_numbered_steps(app):
+    """It sat at the bottom of the deploy panel, inside the 1-2-3 flow, where
+    it read as a fourth step. Flattening it did not help -- the problem was
+    where it was, not how loud."""
     window = Deployer(watch_robot=False)
     try:
-        assert window.uninstall_button.isFlat()
-        assert not window.deploy_button.isFlat()
+        titles = [a.text() for a in window.more_button.menu().actions()]
+        assert any('卸载' in x or 'Remove' in x for x in titles)
+        assert not hasattr(window, 'uninstall_button')
+    finally:
+        window.deleteLater()
+
+
+def test_uninstall_is_offered_only_once_a_robot_is_answering(app):
+    """Offering it with no robot there produces a failure the customer then
+    has to interpret."""
+    from deployer.core import watch
+
+    window = Deployer(watch_robot=False)
+    try:
+        assert not window.uninstall_action.isEnabled()
+        window._on_status(watch.Status(watch.READY, '好了', 'agi'))
+        assert window.uninstall_action.isEnabled()
+        window._on_status(watch.Status(watch.NO_LINK, '没网线'))
+        assert not window.uninstall_action.isEnabled()
     finally:
         window.deleteLater()
 

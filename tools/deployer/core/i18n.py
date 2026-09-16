@@ -27,6 +27,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         'zh': 'X2 迎宾部署',
         'en': 'X2 Greeter Deployment'},
     'app.language': {'zh': 'English', 'en': '中文'},
+    'app.more': {'zh': '更多操作', 'en': 'More actions'},
 
     'section.robot': {'zh': '1 · 机器人', 'en': '1 · Robot'},
     'section.phrases': {'zh': '2 · 问候语', 'en': '2 · Greetings'},

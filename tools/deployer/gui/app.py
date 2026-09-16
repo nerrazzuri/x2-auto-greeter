@@ -17,6 +17,7 @@ this project has produced looked healthy at every earlier point.
 """
 from __future__ import annotations
 
+import datetime
 import sys
 import threading
 from pathlib import Path
@@ -26,8 +27,9 @@ from PyQt6.QtCore import QObject, Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QFileDialog, QGroupBox, QHBoxLayout,
-    QHeaderView, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar,
-    QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+    QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu,
+    QMessageBox, QProgressBar, QPushButton, QSizePolicy, QTableWidget,
+    QTableWidgetItem, QVBoxLayout, QWidget)
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -160,17 +162,36 @@ class Deployer(QWidget):
         """
         super().__init__()
         self.setWindowTitle(t('app.title'))
-        self.resize(820, 900)
+        self.resize(1060, 740)
         self._thread: Optional[QThread] = None
         self._weights_dir: Optional[str] = None
 
+        # Two columns, because only one thing on this window grows: the
+        # greeting list. Stacked vertically it had to share height with a
+        # one-line status and a handful of controls, and the customer scrolled
+        # a table to read their own sentences. Now the narrow column holds
+        # everything that is a fixed size and the wide one is all list.
         layout = QVBoxLayout(self)
-        layout.setSpacing(14)
-        layout.addLayout(self._language_row())
-        layout.addWidget(self._robot_box())
-        layout.addWidget(self._phrases_box(), stretch=1)
-        layout.addWidget(self._deploy_box())
-        layout.addWidget(self._log_box(), stretch=1)
+        layout.setSpacing(12)
+        layout.addLayout(self._header_row())
+
+        columns = QHBoxLayout()
+        columns.setSpacing(12)
+
+        left = QVBoxLayout()
+        left.setSpacing(12)
+        left.addWidget(self._robot_box())
+        left.addWidget(self._deploy_box())
+        left.addStretch(1)
+
+        holder = QWidget()
+        holder.setLayout(left)
+        holder.setFixedWidth(360)
+        columns.addWidget(holder)
+        columns.addWidget(self._phrases_box(), stretch=1)
+        layout.addLayout(columns, stretch=3)
+
+        layout.addWidget(self._log_box(), stretch=2)
 
         self._fix_text = ''
         self._robot_ready = False
@@ -185,9 +206,30 @@ class Deployer(QWidget):
 
     # -- sections ---------------------------------------------------------
 
-    def _language_row(self) -> QHBoxLayout:
+    def _header_row(self) -> QHBoxLayout:
+        """Language, and a menu for everything that is not one of the steps.
+
+        Uninstall lived at the bottom of the deploy panel, inside the numbered
+        1-2-3 flow, where it read as a fourth step. Flattening the button did
+        not help: the problem was where it was, not how loud. A menu says
+        "this is maintenance" without a word of explanation.
+        """
         row = QHBoxLayout()
         row.addStretch(1)
+
+        self.more_button = QPushButton('⋯')
+        self.more_button.setFlat(True)
+        self.more_button.setFixedWidth(34)
+        self.more_button.setToolTip(t('app.more'))
+        menu = QMenu(self)
+        self.uninstall_action = menu.addAction(t('uninstall.button'))
+        self.uninstall_action.triggered.connect(self._uninstall)
+        # Nothing to remove until a robot is answering, and offering it then
+        # would only produce a failure the customer has to interpret.
+        self.uninstall_action.setEnabled(False)
+        self.more_button.setMenu(menu)
+        row.addWidget(self.more_button)
+
         self.language_button = QPushButton(t('app.language'))
         self.language_button.setFlat(True)
         self.language_button.setMaximumWidth(110)
@@ -205,7 +247,8 @@ class Deployer(QWidget):
         button they pressed out of curiosity would be unforgivable.
         """
         other = LANGUAGES[(LANGUAGES.index(language()) + 1) % len(LANGUAGES)]
-        carried = (self._rows(), self.venue.text(), self.log.toPlainText(),
+        carried = (self._rows(), self.venue.text(),
+                   [self.log.item(i).text() for i in range(self.log.count())],
                    self.identity.text(), self.autostart.isChecked())
         set_language(other)
 
@@ -214,8 +257,8 @@ class Deployer(QWidget):
         fresh = Deployer(watch_robot=self._watching)
         fresh._set_rows(carried[0])
         fresh.venue.setText(carried[1])
-        if carried[2]:
-            fresh.log.setPlainText(carried[2])
+        for line in carried[2]:
+            fresh.log.addItem(line)
         fresh.identity.setText(carried[3])
         fresh.autostart.setChecked(carried[4])
         fresh.resize(self.size())
@@ -288,7 +331,13 @@ class Deployer(QWidget):
         self.table.setHorizontalHeaderLabels([t('phrases.column')])
         self.table.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.ResizeMode.Stretch)
+        self.table.setWordWrap(True)
         self.table.verticalHeader().setDefaultSectionSize(26)
+        # Rows grow to fit the sentence. A greeting clipped at the right edge
+        # is the one thing on this window the customer is actually here to
+        # read, and they were scrolling sideways to finish their own wording.
+        self.table.verticalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents)
         self.table.itemChanged.connect(lambda _item: self._revalidate())
         outer.addWidget(self.table, stretch=1)
 
@@ -338,17 +387,9 @@ class Deployer(QWidget):
         self.progress = QProgressBar()
         self.progress.setTextVisible(True)
         self.progress.setFormat(t('deploy.idle'))
+        self.progress.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                    QSizePolicy.Policy.Fixed)
         outer.addWidget(self.progress)
-
-        # Flat, small, and to one side. It is needed rarely and it destroys
-        # work, so it should not sit next to the button people came to press.
-        row = QHBoxLayout()
-        row.addStretch(1)
-        self.uninstall_button = QPushButton(t('uninstall.button'))
-        self.uninstall_button.setFlat(True)
-        self.uninstall_button.clicked.connect(self._uninstall)
-        row.addWidget(self.uninstall_button)
-        outer.addLayout(row)
 
         self.result = QLabel()
         self.result.setWordWrap(True)
@@ -358,9 +399,14 @@ class Deployer(QWidget):
     def _log_box(self) -> QGroupBox:
         box = QGroupBox(t('section.log'))
         outer = QVBoxLayout(box)
-        self.log = QPlainTextEdit()
-        self.log.setReadOnly(True)
-        self.log.setFont(QFont('monospace'))
+        # A list, not a text box. Entries arrive one at a time and are read
+        # one at a time; in a text box a multi-line failure ran together with
+        # whatever came next and the customer could not tell where one thing
+        # ended. One row per entry, each stamped, each coloured by what it is.
+        self.log = QListWidget()
+        self.log.setAlternatingRowColors(True)
+        self.log.setFont(QFont('monospace', 9))
+        self.log.setWordWrap(False)
         outer.addWidget(self.log)
 
         # The panel above is lost when the program dies, which is exactly when
@@ -550,8 +596,11 @@ class Deployer(QWidget):
         self.fix_button.setVisible(bool(rest))
 
         self._robot_ready = status.ready
+        self.uninstall_action.setEnabled(status.ready)
         if self._throttle.should_log(status):
-            self._say(status.detail.replace('\n', ' '))
+            kinds = {watch.READY: 'ok', watch.WRONG_SUBNET: 'fail',
+                     watch.NO_SSH: 'warn'}
+            self._say(status.detail, kinds.get(status.state, 'info'))
 
     def stop_watching(self) -> None:
         """Stop the polling thread and wait for it. Safe to call twice."""
@@ -653,7 +702,6 @@ class Deployer(QWidget):
             return
 
         self.deploy_button.setEnabled(False)
-        self.uninstall_button.setEnabled(False)
         self.result.setText('')
         self.progress.setValue(0)
         self._steps_done, self._steps_total = 0, 5
@@ -666,7 +714,6 @@ class Deployer(QWidget):
 
     def _on_uninstalled(self, outcome) -> None:
         self.deploy_button.setEnabled(True)
-        self.uninstall_button.setEnabled(True)
         ok = bool(getattr(outcome, 'ok', False))
         self.progress.setValue(100 if ok else self.progress.value())
         self.progress.setFormat(t('deploy.done') if ok else t('deploy.failed'))
@@ -678,16 +725,17 @@ class Deployer(QWidget):
                       + (f' -- {event.message}' if event.message else ''))
         if event.status is Status.RUNNING:
             self.progress.setFormat(f'{event.step}…')
-            self._say(f'· {event.step}')
+            self._say(f'{event.step}…')
         elif event.status is Status.OK:
             self._steps_done += 1
             self.progress.setValue(
                 int(self._steps_done * 100 / max(self._steps_total, 1)))
-            self._say(f'  ✓ {event.message}' if event.message else '  ✓')
+            self._say(f'✓ {event.step}'
+                      + (f' — {event.message}' if event.message else ''), 'ok')
         elif event.status is Status.INFO:
-            self._say(f'    {event.message}')
+            self._say(f'  {event.message}')
         else:
-            self._say(f'  ✗ {event.message}')
+            self._say(f'✗ {event.step} — {event.message}', 'fail')
 
     def _on_done(self, outcome) -> None:
         self.deploy_button.setEnabled(True)
@@ -706,11 +754,26 @@ class Deployer(QWidget):
 
     # -- plumbing ---------------------------------------------------------
 
-    def _say(self, text: str) -> None:
+    LOG_COLOURS = {'ok': OK_GREEN, 'fail': FAIL_RED, 'warn': AMBER}
+
+    def _say(self, text: str, kind: str = 'info') -> None:
+        """One line in the panel, and the whole thing in the file.
+
+        The panel gets the first line only: a failure's instructions run to
+        eight lines and would push the deployment's own progress off the
+        screen. The file keeps all of it, which is what gets sent to support.
+        """
         logbook.write(text)
-        self.log.appendPlainText(text)
-        self.log.verticalScrollBar().setValue(
-            self.log.verticalScrollBar().maximum())
+
+        first = text.splitlines()[0] if text else ''
+        stamp = datetime.datetime.now().strftime('%H:%M:%S')
+        item = QListWidgetItem(f'{stamp}   {first}')
+        if kind in self.LOG_COLOURS:
+            item.setForeground(QColor(self.LOG_COLOURS[kind]))
+        if len(text.splitlines()) > 1:
+            item.setToolTip(text)          # the rest, on hover
+        self.log.addItem(item)
+        self.log.scrollToBottom()
 
     def _start(self, worker: QObject) -> None:
         """Run one worker on its own thread, keeping both alive until it ends.
