@@ -962,3 +962,101 @@ def test_opening_a_file_remembers_it_for_next_time(app, monkeypatch, tmp_path):
         assert library.last() == elsewhere.resolve()
     finally:
         window.deleteLater()
+
+
+def _box_titled(window, text):
+    """The group box whose heading is this, by the text a customer reads."""
+    from PyQt6.QtWidgets import QGroupBox
+
+    for box in window.findChildren(QGroupBox):
+        if box.title() == text:
+            return box
+    raise AssertionError(f'找不到标题是「{text}」的面板')
+
+
+def test_the_title_belongs_to_the_window_not_to_the_left_column(app):
+    """It used to sit above "1 · Robot", where it read as that panel's
+    heading and pushed step 1 half a panel below step 2."""
+    from deployer.core.i18n import t
+
+    window = Deployer(watch_robot=False)
+    try:
+        window.resize(1200, 800)
+        window.show()
+        app.processEvents()
+
+        centre = window.title_label.mapTo(
+            window, window.title_label.rect().center()).x()
+        assert abs(centre - window.width() / 2) < window.width() * 0.05, \
+            '标题应该居中在整个窗口上'
+
+        robot_box = _box_titled(window, t('section.robot'))
+        assert not window.title_label.isAncestorOf(robot_box)
+        assert not robot_box.isAncestorOf(window.title_label), \
+            '标题不该在「1 · 机器人」那一栏里'
+    finally:
+        window.close()
+        window.deleteLater()
+
+
+def test_step_one_and_step_two_start_at_the_same_height(app):
+    """A customer reads 1 then 2. They should be side by side, not stepped."""
+    from deployer.core.i18n import t
+
+    window = Deployer(watch_robot=False)
+    try:
+        window.resize(1200, 800)
+        window.show()
+        app.processEvents()
+
+        one = _box_titled(window, t('section.robot'))
+        two = _box_titled(window, t('section.phrases'))
+        top_of_one = one.mapTo(window, one.rect().topLeft()).y()
+        top_of_two = two.mapTo(window, two.rect().topLeft()).y()
+        assert abs(top_of_one - top_of_two) <= 2, \
+            f'1 在 {top_of_one},2 在 {top_of_two},应该齐平'
+    finally:
+        window.close()
+        window.deleteLater()
+
+
+def test_the_picture_gets_more_of_the_window_than_the_log(app):
+    """The log holds a couple of dozen lines at most and had height it was
+    not using; the picture is the only thing here that grows."""
+    window = Deployer(watch_robot=False)
+    try:
+        # Tall enough that the stretch factors decide it. Below about 1000 the
+        # panels' own minimum heights do, and the ratio never comes into play.
+        window.resize(1200, 1040)
+        window.show()
+        app.processEvents()
+
+        assert window.portrait.height() > 300, \
+            f'照片只有 {window.portrait.height()} 高,太小了'
+        assert window.portrait.height() > window.log.height(), \
+            f'照片 {window.portrait.height()},日志 {window.log.height()}'
+    finally:
+        window.close()
+        window.deleteLater()
+
+
+def test_the_left_column_claims_its_share_of_the_height(app):
+    """A bigger window has to make the picture bigger, not just the log.
+
+    The sizes above are one window size; this is the ratio still holding when
+    the customer maximises, which is what they will actually see.
+    """
+    window = Deployer(watch_robot=False)
+    try:
+        window.resize(1200, 1040)
+        window.show()
+        app.processEvents()
+        short = window.portrait.height()
+
+        window.resize(1200, 1400)
+        app.processEvents()
+        assert window.portrait.height() > short + 150, \
+            '窗口高了 360,照片几乎没变大'
+    finally:
+        window.close()
+        window.deleteLater()

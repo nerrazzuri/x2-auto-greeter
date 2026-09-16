@@ -184,7 +184,10 @@ class Deployer(QWidget):
 
         left = QVBoxLayout()
         left.setSpacing(12)
-        left.addWidget(self._masthead())
+        # No margins of its own: the right-hand panel sits directly in the
+        # row, so a layout's default 9px would drop step 1 below step 2 by
+        # exactly that much, which reads as a mistake rather than as a margin.
+        left.setContentsMargins(0, 0, 0, 0)
         left.addWidget(self._robot_box())
         left.addWidget(self._deploy_box())
         # The picture takes the slack instead of an invisible spacer, so the
@@ -197,9 +200,12 @@ class Deployer(QWidget):
         holder.setFixedWidth(360)
         columns.addWidget(holder)
         columns.addWidget(self._phrases_box(), stretch=1)
-        layout.addLayout(columns, stretch=3)
+        # Two thirds to the steps, one to the log. The log only ever holds a
+        # couple of dozen lines and had height it was not using, while the
+        # picture -- the one thing here that grows -- had none to spare.
+        layout.addLayout(columns, stretch=2)
 
-        layout.addWidget(self._log_box(), stretch=2)
+        layout.addWidget(self._log_box(), stretch=1)
 
         # Across the bottom, under the log it summarises. In the narrow column
         # it was a short bar in a panel of its own, easy to miss and easy to
@@ -232,40 +238,52 @@ class Deployer(QWidget):
     # -- sections ---------------------------------------------------------
 
     def _masthead(self) -> QWidget:
-        """What this program is, in two lines, above the numbered steps.
+        """The program's name, across the top and centred.
 
-        The picture that used to sit beside these words is now at the foot of
-        the column where it has room to be a picture. This is only the name.
+        It used to sit inside the left column, above "1 · Robot", where it
+        read as a heading for that panel rather than for the window, and it
+        pushed step 1 half a panel lower than step 2. A title belongs to the
+        whole window, so it is in the whole window's width.
         """
         card = QWidget()
         words = QVBoxLayout(card)
-        words.setContentsMargins(4, 0, 4, 0)
+        words.setContentsMargins(0, 0, 0, 0)
         words.setSpacing(2)
 
-        title = QLabel(t('app.title'))
-        title_font = QFont(title.font())
-        title_font.setPointSize(title_font.pointSize() + 3)
+        self.title_label = QLabel(t('app.title'))
+        title_font = QFont(self.title_label.font())
+        title_font.setPointSize(title_font.pointSize() + 4)
         title_font.setBold(True)
-        title.setFont(title_font)
+        self.title_label.setFont(title_font)
+        self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        subtitle = QLabel(t('app.tagline'))
-        subtitle.setWordWrap(True)
-        subtitle.setStyleSheet(f'color: {WAIT_GREY};')
+        self.tagline_label = QLabel(t('app.tagline'))
+        self.tagline_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.tagline_label.setStyleSheet(f'color: {WAIT_GREY};')
 
-        words.addWidget(title)
-        words.addWidget(subtitle)
+        words.addWidget(self.title_label)
+        words.addWidget(self.tagline_label)
         return card
 
     def _header_row(self) -> QHBoxLayout:
-        """Language, and a menu for everything that is not one of the steps.
+        """The name in the middle, and on the right the things that are not
+        one of the steps.
 
         Uninstall lived at the bottom of the deploy panel, inside the numbered
         1-2-3 flow, where it read as a fourth step. Flattening the button did
         not help: the problem was where it was, not how loud. A menu says
         "this is maintenance" without a word of explanation.
+
+        The title is centred on the window rather than on what is left after
+        the buttons: the two side regions carry the same stretch, so they take
+        the same width and the name sits in the middle of the window.
         """
         row = QHBoxLayout()
         row.addStretch(1)
+        row.addWidget(self._masthead())
+
+        right = QHBoxLayout()
+        right.addStretch(1)
 
         self.more_button = QPushButton('⋯')
         self.more_button.setFlat(True)
@@ -278,13 +296,15 @@ class Deployer(QWidget):
         # would only produce a failure the customer has to interpret.
         self.uninstall_action.setEnabled(False)
         self.more_button.setMenu(menu)
-        row.addWidget(self.more_button)
+        right.addWidget(self.more_button)
 
         self.language_button = QPushButton(t('app.language'))
         self.language_button.setFlat(True)
         self.language_button.setMaximumWidth(110)
         self.language_button.clicked.connect(self._switch_language)
-        row.addWidget(self.language_button)
+        right.addWidget(self.language_button)
+
+        row.addLayout(right, stretch=1)
         return row
 
     def _switch_language(self) -> None:
