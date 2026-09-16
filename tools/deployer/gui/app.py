@@ -30,12 +30,25 @@ from PyQt6.QtWidgets import (
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from deployer.core import assets, phrases as P                      # noqa: E402
+from deployer.core import assets, network, phrases as P             # noqa: E402
 from deployer.core.deployment import Deployment, Event, Plan, Status  # noqa: E402
 from deployer.core.robot import (                                   # noqa: E402
     DEFAULT_HOST, DEFAULT_PASSWORD, DEFAULT_USER, Robot, RobotError)
 
-PACKAGE_ROOT = Path(__file__).resolve().parents[2].parent   # the repository
+def _package_root() -> Path:
+    """What to upload to the robot.
+
+    Frozen, that is payload/ inside the unpacked bundle -- deliberately not
+    the bundle itself, which also holds the Python runtime this program is
+    running on. From source, it is the repository.
+    """
+    bundle = getattr(sys, '_MEIPASS', None)
+    if bundle:
+        return Path(bundle) / 'payload'
+    return Path(__file__).resolve().parents[2].parent
+
+
+PACKAGE_ROOT = _package_root()
 
 OK_GREEN = '#2c6a45'
 FAIL_RED = '#a6332a'
@@ -52,6 +65,13 @@ class DetectWorker(QObject):
         self._args = (host, user, password)
 
     def run(self):
+        # The route is checked first because paramiko cannot tell a loose
+        # cable from an address on the wrong subnet, and those have opposite
+        # fixes -- one is a plug, the other is a settings panel.
+        route = network.check(self._args[0])
+        if not route:
+            self.done.emit(None, route.detail)
+            return
         try:
             with Robot(*self._args) as robot:
                 self.done.emit(robot.identify(), '')
@@ -360,9 +380,17 @@ class Deployer(QWidget):
         def finished(identity, error: str) -> None:
             self.detect_button.setEnabled(True)
             if identity is None:
-                self.identity.setText(error)
+                first, _, rest = error.partition('\n')
+                self.identity.setText(first)
                 self.identity.setStyleSheet(f'color: {FAIL_RED};')
                 self._say(f'检测失败:{error}')
+                if rest:
+                    box = QMessageBox(self)
+                    box.setIcon(QMessageBox.Icon.Information)
+                    box.setWindowTitle('连不上机器人')
+                    box.setText(first)
+                    box.setInformativeText(rest)
+                    box.exec()
             else:
                 self.identity.setText(f'✓ {identity}')
                 self.identity.setStyleSheet(f'color: {OK_GREEN};')

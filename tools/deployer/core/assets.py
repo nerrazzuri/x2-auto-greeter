@@ -59,12 +59,16 @@ def cache_dir() -> Path:
 
 
 def search_paths(extra: Optional[str] = None) -> List[Path]:
+    import sys
+
     here = Path(__file__).resolve()
     repo = here.parents[3]                      # .../tools/deployer/core/ -> repo
+    bundle = getattr(sys, '_MEIPASS', None)     # set when frozen by PyInstaller
     candidates = [
         Path(extra) if extra else None,
+        Path(bundle) / 'models' if bundle else None,   # shipped inside the exe
         cache_dir(),
-        here.parents[2] / 'models',             # bundled next to the deployer
+        here.parents[2] / 'models',             # beside the deployer, unfrozen
         repo / 'models',
         Path.home() / 'x2-models',              # where the CLI runbook puts them
     ]

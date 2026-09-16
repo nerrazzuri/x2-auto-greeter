@@ -2,15 +2,31 @@
 
 给**没有工程师的客户**用的图形部署工具。客户只需要:插好网线 → 填问候语 → 点「开始部署」。
 
+## 客户怎么打开
+
+**方式一:双击可执行文件**(推荐,客户什么都不用装)
+
+仓库根目录下的 `X2部署工具`(Linux)或 `X2部署工具.exe`(Windows),双击即可。Python、所有依赖库、识别模型都打在里面了。
+
+**方式二:双击启动脚本**(需要电脑上有 Python)
+
+`启动部署工具.sh`(Linux)或 `启动部署工具.bat`(Windows)。缺什么组件会自动装,失败时停在窗口里说明原因,不会一闪而过。
+
+**方式三:命令行**(开发用)
+
 ```bash
 python3 tools/deployer/gui/app.py
 ```
 
-需要 `PyQt6`、`paramiko`、`PyYAML`。
+## 怎么生成可执行文件
 
 ```bash
-python3 -m pip install PyQt6 paramiko PyYAML
+python3 tools/deployer/build.py
 ```
+
+**PyInstaller 不能交叉编译**:Windows 的 `.exe` 必须在 Windows 上打包,Linux 的必须在 Linux 上打包。要发给哪个平台的客户,就在哪个平台上跑一次。
+
+打包时如果这台机器上已经有识别模型,会一并打进去(体积多 23 MB)。这是有意的——客户的笔记本插着网线连机器人时可能根本上不了网,一个能用的 23 MB 程序胜过一个看不见人的 5 MB 程序。
 
 ## 它做了什么
 
@@ -32,14 +48,22 @@ python3 -m pip install PyQt6 paramiko PyYAML
 ## 目录结构
 
 ```
-core/       不含任何 Qt,可单独测试,Windows 版直接复用
+core/       不含任何 Qt,可单独测试,Windows 和 Linux 共用同一份
   phrases.py     问候语的读写和校验
   robot.py       SSH/SFTP(paramiko,不依赖 bash/rsync/sshpass)
   assets.py      识别模型的查找与下载
+  network.py     连不上时,分辨是网线问题还是地址问题
   deployment.py  九个步骤
 gui/
   app.py         窗口
+build.py    打包成单文件可执行程序
 ```
+
+## 跨平台
+
+`core/` 全部是标准库加 paramiko,没有调用任何外部命令。远端路径用 `posixpath`(机器人是 Linux),本地路径用 `os.path`,所以 Windows 的反斜杠不会跑到机器人上去。
+
+唯一需要分平台的是**连不上机器人时的提示**:两个系统改网卡地址的位置完全不同,所以 `network.py` 会根据当前系统给出对应的操作路径(Windows 是控制面板 → TCP/IPv4,Linux 是设置 → 网络)。它只诊断、不修改——改网卡需要管理员权限,不该由部署工具向客户索取。
 
 为什么不直接调用 `tools/deploy/install.sh`:那是 bash,用到 `rsync`、`ssh-copy-id`、`nmcli`,Windows 上一个都没有。`core/` 用 Python 重写了同样的流程,行为一致——都只写 `/home/run/x2_greeter`,都不碰 `/agibot`,都不上传 `docs/`。
 

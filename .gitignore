@@ -28,3 +28,9 @@ assets/audio/*.pcm
 # Secrets
 .env
 .superpowers/
+
+# Built by tools/deployer/build.py. Rebuilt per platform, never committed:
+# a 79 MB binary in git history is 79 MB in every clone, forever.
+/X2部署工具
+/X2部署工具.exe
+tools/deployer/build/
