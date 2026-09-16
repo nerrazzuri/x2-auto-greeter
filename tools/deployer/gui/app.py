@@ -30,7 +30,7 @@ from PyQt6.QtWidgets import (
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from deployer.core import assets, network, phrases as P             # noqa: E402
+from deployer.core import assets, logbook, network, phrases as P    # noqa: E402
 from deployer.core.i18n import (LANGUAGES, language, set_language, t,  # noqa: E402
                                 use_system_language)
 from deployer.core.deployment import Deployment, Event, Plan, Status  # noqa: E402
@@ -95,7 +95,13 @@ class DownloadWorker(QObject):
 
 
 class DeployWorker(QObject):
-    event = pyqtSignal(object)
+    # Not `event`: QObject.event() is the virtual Qt calls to dispatch events
+    # to an object, and a signal of that name shadows it. moveToThread then
+    # raised "native Qt signal is not callable" from inside Qt, left the
+    # thread half-moved, and the process aborted with "QThread: Destroyed
+    # while thread is still running" -- which the customer saw as the window
+    # vanishing the moment they pressed Deploy.
+    reported = pyqtSignal(object)
     done = pyqtSignal(object)
 
     def __init__(self, robot: Robot, plan: Plan):
@@ -103,7 +109,7 @@ class DeployWorker(QObject):
         self._robot, self._plan = robot, plan
 
     def run(self):
-        outcome = Deployment(self._robot, self._plan, self.event.emit).run()
+        outcome = Deployment(self._robot, self._plan, self.reported.emit).run()
         try:
             self._robot.close()
         except Exception:                   # noqa: BLE001 - already finished
@@ -281,7 +287,25 @@ class Deployer(QWidget):
         self.log.setReadOnly(True)
         self.log.setFont(QFont('monospace'))
         outer.addWidget(self.log)
+
+        # The panel above is lost when the program dies, which is exactly when
+        # somebody needs it. The file is not, so the window says where it is.
+        row = QHBoxLayout()
+        where = QLabel(t('log.saved_to', path=logbook.path() or logbook.directory()))
+        where.setStyleSheet(f'color: {WAIT_GREY}; font-size: 11px;')
+        where.setWordWrap(True)
+        open_button = QPushButton(t('log.open'))
+        open_button.clicked.connect(self._open_log_folder)
+        row.addWidget(where, stretch=1)
+        row.addWidget(open_button)
+        outer.addLayout(row)
         return box
+
+    def _open_log_folder(self) -> None:
+        from PyQt6.QtCore import QUrl
+        from PyQt6.QtGui import QDesktopServices
+
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(logbook.directory())))
 
     # -- phrase table -----------------------------------------------------
 
@@ -479,7 +503,7 @@ class Deployer(QWidget):
                     start_after=True)
 
         worker = DeployWorker(robot, plan)
-        worker.event.connect(self._on_event)
+        worker.reported.connect(self._on_event)
         worker.done.connect(self._on_done)
         self._say(t('deploy.begin'))
         self._start(worker)
@@ -520,6 +544,8 @@ class Deployer(QWidget):
         return standard
 
     def _on_event(self, event: Event) -> None:
+        logbook.write(f'[{event.status.value}] {event.step}'
+                      + (f' -- {event.message}' if event.message else ''))
         if event.status is Status.RUNNING:
             self.progress.setFormat(f'{event.step}…')
             self._say(f'· {event.step}')
@@ -551,6 +577,7 @@ class Deployer(QWidget):
     # -- plumbing ---------------------------------------------------------
 
     def _say(self, text: str) -> None:
+        logbook.write(text)
         self.log.appendPlainText(text)
         self.log.verticalScrollBar().setValue(
             self.log.verticalScrollBar().maximum())
@@ -572,6 +599,7 @@ class Deployer(QWidget):
 
 
 def main() -> int:
+    logbook.start()
     app = QApplication(sys.argv)
     # Chinese for a Chinese system, English for anything else, before the
     # window is built -- every label is read once, at construction.

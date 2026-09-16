@@ -289,3 +289,60 @@ def test_the_standard_greetings_pass_their_own_checks():
     from deployer.core import phrases as P
 
     assert P.check(P.defaults()) == []
+
+
+# -- signals that shadow Qt's own members ------------------------------------
+
+def test_no_worker_signal_shadows_a_qobject_member():
+    """A signal named `event` shadowed QObject.event(), the virtual Qt calls
+    to dispatch events to an object. moveToThread then raised "native Qt
+    signal is not callable" from inside Qt, left the thread half-moved, and
+    the process aborted -- which the customer saw as the window vanishing the
+    moment they pressed Deploy.
+
+    Nothing about that is specific to `event`: any name QObject already uses
+    does the same, and none of them fail until the program is running.
+    """
+    from PyQt6.QtCore import QObject, pyqtSignal
+
+    from deployer.gui import app as gui
+
+    workers = [value for value in vars(gui).values()
+               if isinstance(value, type) and issubclass(value, QObject)
+               and value is not QObject]
+    assert workers, '没有找到任何 QObject 子类,测试本身失效了'
+
+    taken = set(dir(QObject))
+    for worker in workers:
+        signals = [name for name, value in vars(worker).items()
+                   if isinstance(value, type(pyqtSignal()))]
+        clashes = [name for name in signals if name in taken]
+        assert clashes == [], f'{worker.__name__} 的信号盖住了 QObject 的成员: {clashes}'
+
+
+def test_a_worker_survives_being_moved_to_a_thread(app, monkeypatch):
+    """The exact operation that aborted, and the line every worker goes
+    through before it does any work.
+
+    The assertion is on sys.excepthook, not on a raised exception: PyQt hands
+    an exception escaping Qt's own call to excepthook and carries on, so
+    moveToThread returned normally while the thread was left half-moved. A
+    test that only checked for a raise would have passed throughout.
+    """
+    from PyQt6.QtCore import QThread
+
+    from deployer.gui.app import DeployWorker
+
+    caught = []
+    monkeypatch.setattr(sys, 'excepthook',
+                        lambda kind, value, tb: caught.append(value))
+
+    thread = QThread()
+    worker = DeployWorker(robot=None, plan=None)
+    try:
+        worker.moveToThread(thread)
+        assert caught == [], f'Qt 内部抛了异常:{caught}'
+        assert worker.thread() is thread
+    finally:
+        thread.quit()
+        thread.wait(1000)

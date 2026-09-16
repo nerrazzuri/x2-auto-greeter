@@ -32,6 +32,11 @@ STRINGS: Dict[str, Dict[str, str]] = {
     'section.phrases': {'zh': '2 · 问候语', 'en': '2 · Greetings'},
     'section.deploy': {'zh': '3 · 部署', 'en': '3 · Deploy'},
     'section.log': {'zh': '过程记录', 'en': 'Progress'},
+    'log.saved_to': {
+        'zh': '完整记录保存在:{path}(出问题时请把这个文件发给技术支持)',
+        'en': 'Full log saved to: {path} (send this file to support if '
+              'something goes wrong)'},
+    'log.open': {'zh': '打开日志文件夹', 'en': 'Open log folder'},
 
     'robot.detect': {'zh': '检测机器人', 'en': 'Find robot'},
     'robot.prompt': {
