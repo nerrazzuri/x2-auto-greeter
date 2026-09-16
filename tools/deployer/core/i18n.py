@@ -93,7 +93,6 @@ STRINGS: Dict[str, Dict[str, str]] = {
     'phrases.filter': {
         'zh': '问候语 (phrases*.yaml *.txt);;所有文件 (*)',
         'en': 'Greetings (phrases*.yaml *.txt);;All files (*)'},
-    'phrases.filter_save': {'zh': '问候语 (*.yaml)', 'en': 'Greetings (*.yaml)'},
     'phrases.not_greetings': {
         'zh': '这个文件不是问候语', 'en': 'That file has no greetings in it'},
     'phrases.opened': {'zh': '已导入 {count} 句:{path}', 'en': 'Opened {count} greetings: {path}'},
@@ -105,6 +104,38 @@ STRINGS: Dict[str, Dict[str, str]] = {
     'phrases.all_good': {'zh': '✓ {count} 句,没有问题。', 'en': '✓ {count} greetings, all good.'},
     'phrases.more': {'zh': '(还有 {count} 处)', 'en': ' (and {count} more)'},
     'phrases.can_fix': {'zh': '　可以点「自动修正」', 'en': '  — press “Fix automatically”'},
+
+    'phrases.reopened': {
+        'zh': '已载入上次用的 {count} 句:{name}',
+        'en': 'Reopened the {count} greetings you used last: {name}'},
+    'phrases.save_prompt': {
+        'zh': '给这份问候语起个名字,例如:KL Gateway Mall',
+        'en': 'Name these greetings, for example: KL Gateway Mall'},
+    'phrases.save_where': {
+        'zh': '保存在 {path}', 'en': 'Kept in {path}'},
+    'phrases.overwrite_title': {'zh': '已经有同名的了', 'en': 'That name is taken'},
+    'phrases.overwrite_body': {
+        'zh': '「{name}」已经存在,要覆盖它吗?',
+        'en': '“{name}” already exists. Replace it?'},
+    'phrases.bad_name': {'zh': '这个名字不能用', 'en': 'That name will not work'},
+    'phrases.save_failed': {'zh': '保存失败:{error}', 'en': 'Could not save: {error}'},
+
+    'library.name_empty': {'zh': '请输入一个名字。', 'en': 'Please type a name.'},
+    'library.name_symbols': {
+        'zh': '名字里不能有 \\ / : * ? " < > | 这些符号。',
+        'en': 'A name cannot contain \\ / : * ? " < > |'},
+    'library.name_dots': {
+        'zh': '名字不能以点开头,也不能只有点。',
+        'en': 'A name cannot start with a dot, or be only dots.'},
+    'library.name_reserved': {
+        'zh': '「{name}」是 Windows 保留的名字,换一个吧。',
+        'en': '“{name}” is a name Windows reserves. Please pick another.'},
+    'library.name_long': {
+        'zh': '名字太长了,最多 {limit} 个字。',
+        'en': 'That name is too long — at most {limit} characters.'},
+    'library.name_trailing': {
+        'zh': '名字结尾不能是点或空格。',
+        'en': 'A name cannot end with a dot or a space.'},
 
     'phrases.will_use_standard': {
         'zh': '未填写问候语。直接点「开始部署」会使用内置的通用问候语。',

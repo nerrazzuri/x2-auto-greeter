@@ -26,14 +26,15 @@ from typing import List, Optional
 from PyQt6.QtCore import QObject, Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
-    QApplication, QFileDialog, QGroupBox, QHBoxLayout,
+    QApplication, QFileDialog, QGroupBox, QHBoxLayout, QInputDialog,
     QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu,
     QMessageBox, QProgressBar, QPushButton, QSizePolicy, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget)
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from deployer.core import assets, logbook, phrases as P, watch      # noqa: E402
+from deployer.core import (assets, library, logbook,                 # noqa: E402
+                           phrases as P, watch)
 from deployer.gui import robot_art                                  # noqa: E402
 from deployer.core.i18n import (LANGUAGES, language, set_language, t,  # noqa: E402
                                 use_system_language)
@@ -224,6 +225,7 @@ class Deployer(QWidget):
         self._throttle = watch.Throttle()
         self._find_weights()
         self._revalidate()
+        self._reopen_last()
         if watch_robot:
             self._start_watching()
 
@@ -510,20 +512,20 @@ class Deployer(QWidget):
         self._revalidate()
 
     def _import(self) -> None:
-        # Opens in the directory the greeting lists live in, filtered to
-        # them. Anything else a customer might open -- the robot's settings,
-        # the shipped config -- is a YAML with no greetings in it, and
-        # phrases.load() names it rather than talking about sections.
-        start = PACKAGE_ROOT / 'x2_greeter_ws' / 'src' / 'x2_greeter' / 'config'
+        # Starts beside the file used last, never inside this program. Frozen,
+        # that is the temporary directory the executable unpacked itself into:
+        # it holds greeter.yaml and two phrases*.yaml belonging to the program,
+        # which read as "the greeting lists you can pick from" and vanish when
+        # the window closes. Filtered, because anything else a customer might
+        # open is a YAML with no greetings in it and phrases.load() names it
+        # rather than talking about sections.
         path, _ = QFileDialog.getOpenFileName(
             self, t('phrases.open_title'),
-            str(start if start.is_dir() else Path.home()),
-            t('phrases.filter'))
+            str(library.start_directory()), t('phrases.filter'))
         if not path:
             return
         try:
             self._set_rows(P.load(path))
-            self._say(t('phrases.opened', count=self.table.rowCount(), path=path))
         except Exception as exc:                         # noqa: BLE001
             box = QMessageBox(self)
             box.setIcon(QMessageBox.Icon.Warning)
@@ -531,14 +533,91 @@ class Deployer(QWidget):
             box.setText(str(exc))
             box.exec()
             self._say(t('phrases.open_failed', error=exc))
+            return
+        library.remember(path)
+        self._say(t('phrases.opened', count=self.table.rowCount(), path=path))
 
     def _export(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(
-            self, t('phrases.save_title'), 'phrases.yaml', t('phrases.filter_save'))
-        if not path:
+        """Ask for a name, not for a place.
+
+        A save dialog hands somebody who has never opened a terminal a
+        directory tree, a file name, an extension and a filter, and the usual
+        result is a greeting list in Downloads under a name nobody recognises
+        a month later. The file goes where everything else this program writes
+        goes, and the window says where that is.
+        """
+        suggestion = self.venue.text().strip()
+        previous = library.last()
+        if not suggestion and previous is not None:
+            suggestion = previous.stem
+
+        while True:
+            # The label says where it will land, which is the question the
+            # customer would otherwise ask ten seconds after pressing Save.
+            name, chose = QInputDialog.getText(
+                self, t('phrases.save_title'),
+                t('phrases.save_prompt') + '\n'
+                + t('phrases.save_where', path=library.directory()),
+                text=suggestion)
+            if not chose:
+                return
+            try:
+                target = library.path_for(name)
+                break
+            except ValueError as exc:
+                # Asked again with what they typed still in the box: the name
+                # is nearly right, and retyping it is the annoying part.
+                QMessageBox.warning(self, t('phrases.bad_name'), str(exc))
+                suggestion = name
+
+        if target.exists() and not self._confirm_overwrite(target):
             return
-        P.save(path, P.apply_fixes(self._rows()), venue=self.venue.text().strip())
-        self._say(t('phrases.saved', path=path))
+
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            P.save(target, P.apply_fixes(self._rows()),
+                   venue=self.venue.text().strip())
+        except OSError as exc:
+            QMessageBox.warning(self, t('phrases.bad_name'),
+                                t('phrases.save_failed', error=exc))
+            return
+
+        library.remember(target)
+        self._say(t('phrases.saved', path=target))
+
+    def _confirm_overwrite(self, target) -> bool:
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle(t('phrases.overwrite_title'))
+        box.setText(t('phrases.overwrite_body', name=target.stem))
+        box.setStandardButtons(QMessageBox.StandardButton.Yes
+                               | QMessageBox.StandardButton.No)
+        box.setDefaultButton(QMessageBox.StandardButton.No)
+        box.exec()
+        return box.clickedButton() is box.button(QMessageBox.StandardButton.Yes)
+
+    def _reopen_last(self) -> None:
+        """Put back the greetings the customer was working on.
+
+        Without this a customer with a curated list of forty re-imports it
+        every time the window opens, which is the sort of friction that ends
+        with them deploying the standard greetings by accident.
+        """
+        previous = library.last()
+        if previous is None:
+            return
+        try:
+            rows = P.load(previous)
+        except Exception as exc:                         # noqa: BLE001
+            # A file edited into nonsense since, or gone unreadable. Not worth
+            # a dialog before the customer has done anything: the table simply
+            # starts empty, as it did before.
+            logbook.write(f'could not reopen {previous}: {exc}')
+            return
+        if not rows:
+            return
+        self._set_rows(rows)
+        self._say(t('phrases.reopened', count=len(rows), name=previous.stem))
 
     def _autofix(self) -> None:
         before = self._rows()

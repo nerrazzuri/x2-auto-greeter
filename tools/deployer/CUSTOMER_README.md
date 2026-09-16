@@ -80,8 +80,10 @@ whether the problem is the cable or the network address, and what to change.
 确认之后,把它们换成你自己的话术:
 
 - 在表格里直接编辑,每行一句
-- 或者点「**打开问候语文件**」,导入一个记事本写的 `.txt`(一句一行)
+- 或者点「**打开问候语文件**」,导入一个记事本写的 `.txt`(一句一行)或 `.yaml`
 - 有问题的行会标红并说明原因;多数问题点「**自动修正**」即可
+
+改好之后点「**保存到文件**」,**只要起个名字**(例如场地名),不用选路径——工具会存在自己的文件夹里,并且**下次打开时自动载入**。所以一份维护好的问候语只需要导入一次。
 
 机器人每次问候会从这些句子里**随机挑一句**。
 
@@ -89,8 +91,12 @@ The window opens with **sample greetings** already filled in — deploy with
 those first, to confirm everything works. Then replace them with your own
 wording: edit the table directly, or press **Open greetings file** to import a
 plain `.txt` with one greeting per line. Problem lines are highlighted with a
-reason; most are cleared by **Fix automatically**. The robot picks one at
-random each time it greets someone.
+reason; most are cleared by **Fix automatically**.
+
+**Save to file** asks only for a name — no folders to choose. The tool keeps it
+and reopens it the next time you start, so a list you have worked on only ever
+has to be imported once. The robot picks one at random each time it greets
+someone.
 
 ### 3 · 点「开始部署」/ Press Deploy
 

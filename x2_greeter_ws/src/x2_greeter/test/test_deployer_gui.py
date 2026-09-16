@@ -23,7 +23,8 @@ sys.path.insert(0, str(REPO / 'tools'))
 
 from PyQt6.QtWidgets import QApplication              # noqa: E402
 
-from deployer.core import assets                    # noqa: E402
+from deployer.core import assets, library           # noqa: E402
+from deployer.core import phrases as P              # noqa: E402
 from deployer.gui.app import Deployer, FAIL_RED, OK_GREEN  # noqa: E402
 
 
@@ -50,6 +51,18 @@ def the_model_is_on_this_machine(monkeypatch, tmp_path):
     """
     monkeypatch.setattr(assets, 'locate',
                         lambda extra=None: assets.Weights(str(tmp_path), []))
+
+
+@pytest.fixture(autouse=True)
+def a_library_of_its_own(monkeypatch, tmp_path):
+    """Never the real ~/.x2-deployer/phrases.
+
+    The window reopens the file used last, so without this the suite's result
+    depends on which greeting file the developer happened to save yesterday --
+    and saving in a test would leave a file behind that changes the next run.
+    """
+    monkeypatch.setattr(library, 'directory', lambda: tmp_path / 'phrases')
+    monkeypatch.setattr(library, '_pointer', lambda: tmp_path / 'last.txt')
 
 
 @pytest.fixture
@@ -799,3 +812,153 @@ def test_the_robot_stands_on_the_floor_of_its_panel(app):
     assert painted[-1] >= image.height() - 4, '机器人应该站在面板底部'
     assert painted[0] > 0, '上面应该留白,不然就不是按比例缩的'
     portrait.deleteLater()
+
+
+def test_saving_asks_for_a_name_and_nothing_else(app, monkeypatch, tmp_path):
+    """Not a save dialog. A customer handed a directory tree, a file name, an
+    extension and a filter puts the list in Downloads and never finds it."""
+    asked = {}
+
+    def fake_input(parent, title, label, **kwargs):
+        asked['title'] = title
+        asked['label'] = label
+        asked['prefilled'] = kwargs.get('text')
+        return 'KL Gateway Mall', True
+
+    monkeypatch.setattr('PyQt6.QtWidgets.QInputDialog.getText', fake_input)
+    chose_a_path = []
+    monkeypatch.setattr('PyQt6.QtWidgets.QFileDialog.getSaveFileName',
+                        lambda *a, **k: chose_a_path.append(a) or ('', ''))
+
+    window = Deployer(watch_robot=False)
+    try:
+        window.venue.setText('KL Gateway Mall')
+        window._set_rows(GOOD)
+        window._export()
+
+        assert asked, '应该问名字'
+        assert str(library.directory()) in asked['label'], '要先说清楚存在哪'
+        assert asked['prefilled'] == 'KL Gateway Mall', '场地名可以直接用'
+        assert chose_a_path == [], '不该让客户挑路径'
+
+        written = library.path_for('KL Gateway Mall')
+        assert written.is_file(), '应该存到工具自己的目录'
+        assert P.load(written) == GOOD
+    finally:
+        window.deleteLater()
+
+
+def test_a_name_that_would_escape_the_folder_is_refused_and_asked_again(
+        app, monkeypatch, tmp_path):
+    """The one that matters: the name is the only thing between a customer
+    and a file somewhere unintended."""
+    names = iter([('../../gotcha', True), ('Mall', True)])
+    monkeypatch.setattr('PyQt6.QtWidgets.QInputDialog.getText',
+                        lambda *a, **k: next(names))
+    warned = []
+    monkeypatch.setattr('PyQt6.QtWidgets.QMessageBox.warning',
+                        lambda *a, **k: warned.append(a[2]))
+
+    window = Deployer(watch_robot=False)
+    try:
+        window._set_rows(GOOD)
+        window._export()
+
+        assert warned, '坏名字要说清楚'
+        assert not (tmp_path.parent / 'gotcha.yaml').exists()
+        assert library.path_for('Mall').is_file(), '改好之后要能存下'
+    finally:
+        window.deleteLater()
+
+
+def test_saving_over_an_existing_name_asks_first(app, monkeypatch):
+    monkeypatch.setattr('PyQt6.QtWidgets.QInputDialog.getText',
+                        lambda *a, **k: ('Mall', True))
+    existing = library.path_for('Mall')
+    existing.parent.mkdir(parents=True, exist_ok=True)
+    existing.write_text('phrases:\n  - "the old one"\n', encoding='utf-8')
+
+    asked = []
+    monkeypatch.setattr('PyQt6.QtWidgets.QMessageBox.exec',
+                        lambda box: asked.append(box.text()))
+    monkeypatch.setattr('PyQt6.QtWidgets.QMessageBox.clickedButton',
+                        lambda _s: None)          # neither button: not "yes"
+
+    window = Deployer(watch_robot=False)
+    try:
+        window._set_rows(GOOD)
+        window._export()
+
+        assert asked, '覆盖前要问'
+        assert P.load(existing) == ['the old one'], '没点确认就不能覆盖'
+    finally:
+        window.deleteLater()
+
+
+def test_the_window_reopens_the_greetings_used_last(app, monkeypatch):
+    """A customer with forty curated greetings should not re-import them every
+    time the window opens."""
+    saved = library.path_for('Mall')
+    saved.parent.mkdir(parents=True, exist_ok=True)
+    P.save(saved, GOOD)
+    library.remember(saved)
+
+    window = Deployer(watch_robot=False)
+    try:
+        assert window._rows() == GOOD
+        assert 'Mall' in log_text(window)
+    finally:
+        window.deleteLater()
+
+
+def test_a_remembered_file_that_has_gone_bad_does_not_stop_the_window(
+        app, monkeypatch):
+    """Files get edited and deleted between sessions. Neither is a reason to
+    greet the customer with a dialog before they have done anything."""
+    broken = library.path_for('Broken')
+    broken.parent.mkdir(parents=True, exist_ok=True)
+    broken.write_text('this: is not a greeting file\n', encoding='utf-8')
+    library.remember(broken)
+
+    window = Deployer(watch_robot=False)
+    try:
+        assert window._rows() == [], '打不开就当没有,表格空着'
+        assert window.deploy_button.isEnabled(), '空表格照样可以部署通用问候语'
+    finally:
+        window.deleteLater()
+
+
+def test_the_open_dialog_does_not_start_inside_the_packaged_program(
+        app, monkeypatch):
+    """Frozen, PACKAGE_ROOT is the temporary directory the executable unpacked
+    itself into. It holds greeter.yaml and two phrases*.yaml that belong to the
+    program, look exactly like greeting lists to choose from, and cease to
+    exist when the window closes."""
+    from deployer.gui import app as app_module
+
+    started = {}
+    monkeypatch.setattr('PyQt6.QtWidgets.QFileDialog.getOpenFileName',
+                        lambda _p, _t, where, _f: started.setdefault('where', where) and ('', ''))
+
+    window = Deployer(watch_robot=False)
+    try:
+        window._import()
+        assert started['where'] == str(Path.home())
+        assert str(app_module.PACKAGE_ROOT) not in started['where']
+    finally:
+        window.deleteLater()
+
+
+def test_opening_a_file_remembers_it_for_next_time(app, monkeypatch, tmp_path):
+    elsewhere = tmp_path / 'from-a-usb-stick.yaml'
+    P.save(elsewhere, GOOD)
+    monkeypatch.setattr('PyQt6.QtWidgets.QFileDialog.getOpenFileName',
+                        lambda *a, **k: (str(elsewhere), ''))
+
+    window = Deployer(watch_robot=False)
+    try:
+        window._import()
+        assert window._rows() == GOOD
+        assert library.last() == elsewhere.resolve()
+    finally:
+        window.deleteLater()
