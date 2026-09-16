@@ -33,11 +33,21 @@ SHA256 = {
     CAFFEMODEL: '52eed8be80522c152a17fb56740de705b79881bde1a167e0e747310523685fc7',
 }
 
+# Both files come from the repository that published this model, at one commit
+# rather than at a branch. A branch is a moving target and the checksums above
+# are not, so a `master` URL turns somebody else's next push into a download
+# that always fails the checksum.
+#
+# These two were wrong from the start and nobody noticed: the deployment only
+# reaches this code on a machine that has no copy yet, and every machine we
+# built on already had one. Do not edit them without fetching both and
+# comparing against SHA256 -- test_deployer_assets.py will do it for you.
+COMMIT = 'bb17b6c3eef36d80be441ae8e5339be66e8e3b7a'
+SOURCE = f'https://raw.githubusercontent.com/chuanqi305/MobileNet-SSD/{COMMIT}/'
+
 URLS = {
-    PROTOTXT: ('https://raw.githubusercontent.com/chuanqi305/MobileNet-SSD/'
-               'daef68a6c2f5fbb8c88404266aa28180646d17e0/voc/MobileNetSSD_deploy.prototxt'),
-    CAFFEMODEL: ('https://raw.githubusercontent.com/PINTO0309/MobileNet-SSD-RealSense/'
-                 'master/caffemodel/MobileNetSSD/MobileNetSSD_deploy.caffemodel'),
+    PROTOTXT: SOURCE + 'deploy.prototxt',
+    CAFFEMODEL: SOURCE + 'mobilenet_iter_73000.caffemodel',
 }
 
 

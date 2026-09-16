@@ -238,11 +238,56 @@ def test_an_empty_table_is_offered_rather_than_refused(app):
         window.deleteLater()
 
 
+def _pretend_the_weights_are_here(window):
+    """Give the window a weights directory before asking it to deploy.
+
+    Any test that calls _deploy() has to, because the first thing _deploy()
+    does without one is open a modal QMessageBox.warning -- a static method,
+    so patching QMessageBox.exec does not touch it, and offscreen it waits for
+    a click that never comes. The suite then hangs rather than fails.
+
+    That is a property of the machine, not of the test: it depends on whether
+    this laptop happens to have the model in one of the six places assets
+    looks. Both tests below passed for months and would have hung on a fresh
+    checkout.
+    """
+    window._weights_dir = '/tmp'
+
+
+def test_deploying_without_the_model_says_so_and_stops(app, monkeypatch):
+    """The branch the two tests below used to fall into by accident."""
+    warned = []
+    monkeypatch.setattr('PyQt6.QtWidgets.QMessageBox.warning',
+                        lambda *a, **k: warned.append(a[1:3]))
+    # Every other modal too, so that a version of _deploy() which warns and
+    # then carries on fails here instead of hanging on the next dialog.
+    monkeypatch.setattr('PyQt6.QtWidgets.QMessageBox.exec', lambda _s: 0)
+    monkeypatch.setattr(
+        'PyQt6.QtWidgets.QMessageBox.clickedButton', lambda _s: None)
+    window = Deployer(watch_robot=False)
+    try:
+        # Real greetings, so the only thing that can stop this deployment is
+        # the missing model. With an empty table the confirmation dialog stops
+        # it too, and the test would pass whatever _deploy() did about weights.
+        window._set_rows(GOOD)
+        window._weights_dir = None
+        started = []
+        monkeypatch.setattr(window, '_start', lambda w: started.append(w))
+
+        window._deploy()
+
+        assert warned, '没有模型就该说一声'
+        assert started == [], '没有模型不能开始部署'
+    finally:
+        window.deleteLater()
+
+
 def test_deploying_an_empty_table_asks_first(app, monkeypatch):
     """Greeting a customer's visitors in words they never saw is not something
     to do quietly."""
     window = Deployer(watch_robot=False)
     try:
+        _pretend_the_weights_are_here(window)
         asked = {}
 
         def fake_exec(box):
@@ -268,6 +313,7 @@ def test_deploying_an_empty_table_asks_first(app, monkeypatch):
 def test_declining_the_standard_greetings_deploys_nothing(app, monkeypatch):
     window = Deployer(watch_robot=False)
     try:
+        _pretend_the_weights_are_here(window)
         monkeypatch.setattr('PyQt6.QtWidgets.QMessageBox.exec', lambda _s: 0)
         monkeypatch.setattr(
             'PyQt6.QtWidgets.QMessageBox.clickedButton', lambda _s: None)

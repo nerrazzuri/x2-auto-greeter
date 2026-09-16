@@ -17,14 +17,14 @@ import os
 import sys
 import urllib.request
 
-DEFAULT_PROTOTXT_URL = (
-    'https://raw.githubusercontent.com/chuanqi305/MobileNet-SSD/'
-    'master/deploy.prototxt'
-)
-DEFAULT_WEIGHTS_URL = (
-    'https://github.com/chuanqi305/MobileNet-SSD/raw/'
-    'master/mobilenet_iter_73000.caffemodel'
-)
+# Pinned to a commit rather than to master, and kept identical to the pair in
+# tools/deployer/core/assets.py -- a test compares the two, because the copy
+# that was allowed to drift is the one that stopped working.
+_COMMIT = 'bb17b6c3eef36d80be441ae8e5339be66e8e3b7a'
+_SOURCE = f'https://raw.githubusercontent.com/chuanqi305/MobileNet-SSD/{_COMMIT}/'
+
+DEFAULT_PROTOTXT_URL = _SOURCE + 'deploy.prototxt'
+DEFAULT_WEIGHTS_URL = _SOURCE + 'mobilenet_iter_73000.caffemodel'
 FILENAMES = ('MobileNetSSD_deploy.prototxt', 'MobileNetSSD_deploy.caffemodel')
 
 
