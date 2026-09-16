@@ -39,6 +39,28 @@ STRINGS: Dict[str, Dict[str, str]] = {
     'log.open': {'zh': '打开日志文件夹', 'en': 'Open log folder'},
 
     'robot.detect': {'zh': '检测机器人', 'en': 'Find robot'},
+
+    # -- watching for the robot ---------------------------------------------
+    'watch.no_link': {
+        'zh': '没有检测到有线网络。请把网线一头插在机器人上,一头插在这台电脑上。',
+        'en': 'No wired network found. Plug the cable into the robot and into '
+              'this computer.'},
+    'watch.wrong_subnet': {
+        'zh': '本机有线网口的地址是 {address},和机器人 {host} 不在同一网段。',
+        'en': 'This computer’s wired address is {address}, which is not on the '
+              'same network as the robot at {host}.'},
+    'watch.no_ssh': {
+        'zh': '网段正确,但 {host} 没有回应。请确认机器人已开机,网线两头都插好。',
+        'en': 'The network is right, but {host} is not answering. Check the '
+              'robot is switched on and both ends of the cable are in.'},
+    'watch.ready': {'zh': '机器人已就绪:{identity}', 'en': 'Robot ready: {identity}'},
+
+    'watch.label_no_link': {'zh': '等待网线接入…', 'en': 'Waiting for the cable…'},
+    'watch.label_wrong_subnet': {'zh': '网段不对', 'en': 'Wrong network'},
+    'watch.label_no_ssh': {'zh': '机器人没有回应', 'en': 'Robot not answering'},
+    'watch.label_ready': {'zh': '机器人已连接', 'en': 'Robot connected'},
+    'watch.how_to_fix': {'zh': '怎么设置?', 'en': 'How do I fix this?'},
+    'watch.fix_title': {'zh': '设置网络地址', 'en': 'Set the network address'},
     'robot.prompt': {
         'zh': '把网线插到机器人上,然后点「检测机器人」。',
         'en': 'Plug the network cable into the robot, then press “Find robot”.'},
@@ -152,6 +174,40 @@ STRINGS: Dict[str, Dict[str, str]] = {
     'step.autostart_on': {'zh': '开机后会自动运行', 'en': 'will start on boot'},
     'step.started': {'zh': '已启动', 'en': 'started'},
     'step.waiting_camera': {'zh': '等待相机启动…', 'en': 'Waiting for the camera…'},
+
+    # -- uninstalling -------------------------------------------------------
+    'uninstall.button': {'zh': '从机器人卸载', 'en': 'Remove from robot'},
+    'uninstall.confirm_title': {'zh': '确认卸载?', 'en': 'Remove the greeter?'},
+    'uninstall.confirm_body': {
+        'zh': '这会把迎宾程序从机器人上完全删除,包括开机自启和已经写好的问候语。'
+              '机器人自带的其他功能不受影响。',
+        'en': 'This removes the greeter from the robot completely, including '
+              'the automatic start and the greetings already written. '
+              'Everything else the robot does is unaffected.'},
+    'uninstall.confirm_yes': {'zh': '删除', 'en': 'Remove'},
+    'uninstall.confirm_no': {'zh': '取消', 'en': 'Cancel'},
+    'uninstall.stop': {'zh': '停止并取消自启', 'en': 'Stopping and disabling'},
+    'uninstall.remove_unit': {'zh': '删除服务定义', 'en': 'Removing the service'},
+    'uninstall.remove_files': {'zh': '删除程序文件', 'en': 'Removing the files'},
+    'uninstall.verify': {'zh': '确认已清理干净', 'en': 'Confirming it is gone'},
+    'uninstall.stopped': {'zh': '已停止', 'en': 'stopped'},
+    'uninstall.unit_removed': {'zh': '已删除', 'en': 'removed'},
+    'uninstall.files_removed': {'zh': '已删除 /home/run/x2_greeter', 'en': 'removed /home/run/x2_greeter'},
+    'uninstall.clean': {'zh': '机器人上已经没有残留', 'en': 'nothing left on the robot'},
+    'uninstall.still_running': {
+        'zh': '服务停不下来,没有继续删除。请稍后重试。',
+        'en': 'The service would not stop, so nothing was deleted. Try again '
+              'shortly.'},
+    'uninstall.files_failed': {
+        'zh': '删除文件失败:{detail}', 'en': 'Could not delete the files: {detail}'},
+    'uninstall.leftovers': {
+        'zh': '还有残留没清掉:{detail}', 'en': 'Something is still there: {detail}'},
+    'uninstall.done': {
+        'zh': '✓ 已从机器人上完全卸载。机器人自带的功能不受影响。',
+        'en': '✓ Removed from the robot. Everything else it does is unaffected.'},
+    'uninstall.failed': {
+        'zh': '✗ 卸载没有完成。下面「过程记录」的最后一行说明了原因。',
+        'en': '✗ Not removed. The last line under “Progress” below says why.'},
 
     # -- failures -----------------------------------------------------------
     'err.password': {

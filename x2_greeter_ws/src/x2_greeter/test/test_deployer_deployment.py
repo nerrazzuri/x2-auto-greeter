@@ -261,3 +261,84 @@ def test_an_empty_greeting_list_never_reaches_a_robot():
 
     assert not outcome.ok
     assert fake.calls == [], '不该连机器人'
+
+
+# -- taking it off a robot ---------------------------------------------------
+
+class UninstallRobot(FakeRobot):
+    """Answers as a robot with a deployment on it, then as one without."""
+
+    def __init__(self, *, leftovers='', stop_fails=False, **kw):
+        super().__init__(**kw)
+        self.leftovers = leftovers
+        self.stop_fails = stop_fails
+
+    def run(self, command, timeout=None):
+        self.calls.append(f'run {command[:60]}')
+        if command.startswith('systemctl is-active'):
+            return R.Result(0, 'active' if self.stop_fails else 'inactive', '')
+        if command.startswith('ls -d'):
+            return R.Result(0, self.leftovers, '')
+        return R.Result(0, '', '')
+
+
+def uninstall(fake):
+    from deployer.core.deployment import Uninstall
+    events = []
+    return Uninstall(fake, events.append).run(), events
+
+
+def test_a_clean_uninstall_leaves_nothing(weights):
+    outcome, events = uninstall(UninstallRobot())
+    assert outcome.ok
+    assert [e for e in events if e.status is Status.FAILED] == []
+
+
+def test_the_service_is_disabled_before_the_files_go(weights):
+    """Deleting the files under a running service leaves systemd restarting a
+    program that is no longer there."""
+    fake = UninstallRobot()
+    uninstall(fake)
+    disable = [i for i, c in enumerate(fake.calls) if 'disable' in c][0]
+    delete = [i for i, c in enumerate(fake.calls) if 'rm -rf' in c][0]
+    assert disable < delete
+
+
+def test_disable_comes_with_now_so_it_cannot_come_back_between_commands(weights):
+    fake = UninstallRobot()
+    uninstall(fake)
+    assert any('disable --now' in c for c in fake.calls)
+
+
+def test_a_service_that_will_not_stop_deletes_nothing(weights):
+    """Half a deployment is worse than all of it: the unit would keep
+    restarting a program whose files had been removed."""
+    fake = UninstallRobot(stop_fails=True)
+    outcome, events = uninstall(fake)
+    assert not outcome.ok
+    assert not any('rm -rf' in c for c in fake.calls), '不该删除任何文件'
+    assert '停不下来' in [e for e in events if e.status is Status.FAILED][0].message
+
+
+def test_leftovers_are_reported_rather_than_declared_clean(weights):
+    """Every other failure in this project looked like success at the point
+    the work was done, so the robot is asked what is left."""
+    fake = UninstallRobot(leftovers='/home/run/x2_greeter')
+    outcome, events = uninstall(fake)
+    assert not outcome.ok
+    assert 'x2_greeter' in [e for e in events if e.status is Status.FAILED][0].message
+
+
+def test_nothing_under_agibot_is_touched(weights):
+    """The vendor's own software was never modified, so there is nothing there
+    to put back -- and deleting from it would break the robot."""
+    fake = UninstallRobot()
+    uninstall(fake)
+    assert not any('/agibot' in c for c in fake.calls)
+
+
+def test_the_vendor_agent_is_left_alone(weights):
+    """Phase 1 never changes its run mode, so there is nothing to restore."""
+    fake = UninstallRobot()
+    uninstall(fake)
+    assert not any('AgentProperties' in c or 'run_mode' in c for c in fake.calls)

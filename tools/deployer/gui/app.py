@@ -18,6 +18,7 @@ this project has produced looked healthy at every earlier point.
 from __future__ import annotations
 
 import sys
+import threading
 from pathlib import Path
 from typing import List, Optional
 
@@ -30,10 +31,11 @@ from PyQt6.QtWidgets import (
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from deployer.core import assets, logbook, network, phrases as P    # noqa: E402
+from deployer.core import assets, logbook, phrases as P, watch      # noqa: E402
 from deployer.core.i18n import (LANGUAGES, language, set_language, t,  # noqa: E402
                                 use_system_language)
-from deployer.core.deployment import Deployment, Event, Plan, Status  # noqa: E402
+from deployer.core.deployment import (Deployment, Event, Plan,       # noqa: E402
+                                      Status, Uninstall)
 from deployer.core.robot import (                                   # noqa: E402
     DEFAULT_HOST, DEFAULT_PASSWORD, DEFAULT_USER, Robot, RobotError)
 
@@ -54,33 +56,45 @@ PACKAGE_ROOT = _package_root()
 
 OK_GREEN = '#2c6a45'
 FAIL_RED = '#a6332a'
+AMBER = '#9c6b1a'
 WAIT_GREY = '#5d686f'
 
 
 # ---------------------------------------------------------------- workers
 
-class DetectWorker(QObject):
-    done = pyqtSignal(object, str)          # Identity | None, error
+class WatchWorker(QObject):
+    """Looks for the robot every couple of seconds, for as long as the window
+    is open.
 
-    def __init__(self, host, user, password):
+    A "Find robot" button asks the customer to guess when the answer might
+    have changed: they plug the cable in, press it, are told the address is
+    wrong, fix the address -- and have to remember to press it again. Each of
+    those is a place to give up. Polling removes all of them.
+
+    `done` exists only so _start() can stop the thread the same way it stops
+    every other worker; this one is finished when it is told to be.
+    """
+
+    status = pyqtSignal(object)
+    done = pyqtSignal(object)
+
+    def __init__(self, watcher: watch.Watcher):
         super().__init__()
-        self._args = (host, user, password)
+        self._watcher = watcher
+        self._stop = threading.Event()
+
+    def stop(self) -> None:
+        self._stop.set()
 
     def run(self):
-        # The route is checked first because paramiko cannot tell a loose
-        # cable from an address on the wrong subnet, and those have opposite
-        # fixes -- one is a plug, the other is a settings panel.
-        route = network.check(self._args[0])
-        if not route:
-            self.done.emit(None, route.detail)
-            return
-        try:
-            with Robot(*self._args) as robot:
-                self.done.emit(robot.identify(), '')
-        except RobotError as exc:
-            self.done.emit(None, str(exc))
-        except Exception as exc:            # noqa: BLE001
-            self.done.emit(None, f'{type(exc).__name__}: {exc}')
+        while not self._stop.is_set():
+            try:
+                self.status.emit(self._watcher.poll())
+            except Exception as exc:        # noqa: BLE001 - must never die
+                logbook.write_exception('watch', exc)
+            # Interruptible: closing the window should not wait two seconds.
+            self._stop.wait(watch.POLL_S)
+        self.done.emit(None)
 
 
 class DownloadWorker(QObject):
@@ -92,6 +106,23 @@ class DownloadWorker(QObject):
             self.done.emit(assets.download(self.progress.emit), '')
         except Exception as exc:            # noqa: BLE001
             self.done.emit('', str(exc))
+
+
+class UninstallWorker(QObject):
+    reported = pyqtSignal(object)
+    done = pyqtSignal(object)
+
+    def __init__(self, robot: Robot):
+        super().__init__()
+        self._robot = robot
+
+    def run(self):
+        outcome = Uninstall(self._robot, self.reported.emit).run()
+        try:
+            self._robot.close()
+        except Exception:                   # noqa: BLE001 - already finished
+            pass
+        self.done.emit(outcome)
 
 
 class DeployWorker(QObject):
@@ -120,7 +151,13 @@ class DeployWorker(QObject):
 # ---------------------------------------------------------------- window
 
 class Deployer(QWidget):
-    def __init__(self):
+    def __init__(self, watch_robot: bool = True):
+        """watch_robot=False builds the window without its polling thread.
+
+        Tests build a lot of these, and a QThread whose owner is collected
+        before it is stopped aborts the process -- which is how the suite
+        started dying at signal 6 the moment polling was added.
+        """
         super().__init__()
         self.setWindowTitle(t('app.title'))
         self.resize(820, 900)
@@ -135,8 +172,16 @@ class Deployer(QWidget):
         layout.addWidget(self._deploy_box())
         layout.addWidget(self._log_box(), stretch=1)
 
+        self._fix_text = ''
+        self._robot_ready = False
+        self._watching = watch_robot
+        # Owned by the window, not by the thread: _on_status is a slot and can
+        # be driven without a watcher running behind it.
+        self._throttle = watch.Throttle()
         self._find_weights()
         self._revalidate()
+        if watch_robot:
+            self._start_watching()
 
     # -- sections ---------------------------------------------------------
 
@@ -164,7 +209,9 @@ class Deployer(QWidget):
                    self.identity.text(), self.autostart.isChecked())
         set_language(other)
 
-        fresh = Deployer()
+        # The new window watches if this one did: a language switch is not a
+        # reason to stop looking for the robot, nor to start.
+        fresh = Deployer(watch_robot=self._watching)
         fresh._set_rows(carried[0])
         fresh.venue.setText(carried[1])
         if carried[2]:
@@ -178,7 +225,7 @@ class Deployer(QWidget):
         # Held on the application so it is not collected the moment this
         # window closes and drops the last reference to it.
         QApplication.instance()._deployer_window = fresh
-        self.close()
+        self.close()          # closeEvent stops this window's polling thread
 
 
     def _robot_box(self) -> QGroupBox:
@@ -194,19 +241,37 @@ class Deployer(QWidget):
         outer = QVBoxLayout(box)
 
         line = QHBoxLayout()
-        self.detect_button = QPushButton(t('robot.detect'))
-        self.detect_button.clicked.connect(self._detect)
-        self.identity = QLabel(t('robot.prompt'))
+        # A dot rather than an icon: it has to read at a glance from a metre
+        # away, which is where somebody stands while plugging a cable in.
+        self.lamp = QLabel('●')
+        self.lamp.setStyleSheet(f'color: {WAIT_GREY}; font-size: 20px;')
+        self.identity = QLabel(t('watch.label_no_link'))
         self.identity.setWordWrap(True)
         self.identity.setStyleSheet(f'color: {WAIT_GREY};')
-        line.addWidget(self.detect_button)
+        self.fix_button = QPushButton(t('watch.how_to_fix'))
+        self.fix_button.clicked.connect(self._show_fix)
+        self.fix_button.hide()
+        line.addWidget(self.lamp)
         line.addWidget(self.identity, stretch=1)
+        line.addWidget(self.fix_button)
         outer.addLayout(line)
 
         target = QLabel(t('robot.target', host=DEFAULT_HOST, user=DEFAULT_USER))
         target.setStyleSheet(f'color: {WAIT_GREY}; font-size: 11px;')
         outer.addWidget(target)
         return box
+
+    def _show_fix(self) -> None:
+        """The full instructions, on demand.
+
+        They run to eight lines and name a settings panel; parking that in the
+        window would push everything else off the screen, and it is only
+        needed by the customer who is stuck."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle(t('watch.fix_title'))
+        box.setText(self._fix_text or '')
+        box.exec()
 
     def _phrases_box(self) -> QGroupBox:
         box = QGroupBox(t('section.phrases'))
@@ -274,6 +339,16 @@ class Deployer(QWidget):
         self.progress.setTextVisible(True)
         self.progress.setFormat(t('deploy.idle'))
         outer.addWidget(self.progress)
+
+        # Flat, small, and to one side. It is needed rarely and it destroys
+        # work, so it should not sit next to the button people came to press.
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.uninstall_button = QPushButton(t('uninstall.button'))
+        self.uninstall_button.setFlat(True)
+        self.uninstall_button.clicked.connect(self._uninstall)
+        row.addWidget(self.uninstall_button)
+        outer.addLayout(row)
 
         self.result = QLabel()
         self.result.setWordWrap(True)
@@ -447,33 +522,55 @@ class Deployer(QWidget):
 
     # -- robot ------------------------------------------------------------
 
-    def _detect(self) -> None:
-        self.detect_button.setEnabled(False)
-        self.identity.setText(t('robot.connecting'))
-        self.identity.setStyleSheet(f'color: {WAIT_GREY};')
-        worker = DetectWorker(DEFAULT_HOST, DEFAULT_USER, DEFAULT_PASSWORD)
+    def _start_watching(self) -> None:
+        self._watch_worker = WatchWorker(watch.Watcher(
+            DEFAULT_HOST, DEFAULT_USER, DEFAULT_PASSWORD))
+        self._watch_worker.status.connect(self._on_status)
 
-        def finished(identity, error: str) -> None:
-            self.detect_button.setEnabled(True)
-            if identity is None:
-                first, _, rest = error.partition('\n')
-                self.identity.setText(first)
-                self.identity.setStyleSheet(f'color: {FAIL_RED};')
-                self._say(t('phrases.open_failed', error=error))
-                if rest:
-                    box = QMessageBox(self)
-                    box.setIcon(QMessageBox.Icon.Information)
-                    box.setWindowTitle(t('robot.cannot_connect'))
-                    box.setText(first)
-                    box.setInformativeText(rest)
-                    box.exec()
-            else:
-                self.identity.setText(f'✓ {identity}')
-                self.identity.setStyleSheet(f'color: {OK_GREEN};')
-                self._say(t('net.connected', host=str(identity)))
+        thread = QThread(self)
+        self._watch_worker.moveToThread(thread)
+        thread.started.connect(self._watch_worker.run)
+        self._watch_worker.done.connect(thread.quit)
+        self._watch_thread = thread
+        thread.start()
 
-        worker.done.connect(finished)
-        self._start(worker)
+    def _on_status(self, status) -> None:
+        colours = {watch.NO_LINK: WAIT_GREY, watch.WRONG_SUBNET: FAIL_RED,
+                   watch.NO_SSH: AMBER, watch.READY: OK_GREEN}
+        colour = colours.get(status.state, WAIT_GREY)
+        self.lamp.setStyleSheet(f'color: {colour}; font-size: 20px;')
+
+        headline, _, rest = status.detail.partition('\n')
+        if status.ready:
+            headline = f'✓ {status.identity}'
+        self.identity.setText(headline)
+        self.identity.setStyleSheet(f'color: {colour};')
+
+        self._fix_text = rest
+        self.fix_button.setVisible(bool(rest))
+
+        self._robot_ready = status.ready
+        if self._throttle.should_log(status):
+            self._say(status.detail.replace('\n', ' '))
+
+    def stop_watching(self) -> None:
+        """Stop the polling thread and wait for it. Safe to call twice."""
+        worker = getattr(self, '_watch_worker', None)
+        thread = getattr(self, '_watch_thread', None)
+        if worker is not None:
+            worker.stop()
+        if thread is not None and thread.isRunning():
+            thread.quit()
+            thread.wait(3000)
+
+    def closeEvent(self, event):                        # noqa: N802 - Qt name
+        """Stop the watcher before the window goes.
+
+        A QThread still running when its last reference goes away aborts the
+        process, which is what the customer would see as the program crashing
+        on exit."""
+        self.stop_watching()
+        super().closeEvent(event)
 
     # -- deploying --------------------------------------------------------
 
@@ -542,6 +639,39 @@ class Deployer(QWidget):
             return None
         self._say(t('phrases.standard_chosen', count=len(standard)))
         return standard
+
+    def _uninstall(self) -> None:
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(t('uninstall.confirm_title'))
+        box.setText(t('uninstall.confirm_body'))
+        remove = box.addButton(t('uninstall.confirm_yes'),
+                               QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton(t('uninstall.confirm_no'), QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is not remove:
+            return
+
+        self.deploy_button.setEnabled(False)
+        self.uninstall_button.setEnabled(False)
+        self.result.setText('')
+        self.progress.setValue(0)
+        self._steps_done, self._steps_total = 0, 5
+
+        worker = UninstallWorker(Robot(DEFAULT_HOST, DEFAULT_USER, DEFAULT_PASSWORD))
+        worker.reported.connect(self._on_event)
+        worker.done.connect(self._on_uninstalled)
+        self._say(t('uninstall.button'))
+        self._start(worker)
+
+    def _on_uninstalled(self, outcome) -> None:
+        self.deploy_button.setEnabled(True)
+        self.uninstall_button.setEnabled(True)
+        ok = bool(getattr(outcome, 'ok', False))
+        self.progress.setValue(100 if ok else self.progress.value())
+        self.progress.setFormat(t('deploy.done') if ok else t('deploy.failed'))
+        self.result.setText(t('uninstall.done') if ok else t('uninstall.failed'))
+        self.result.setStyleSheet(f'color: {OK_GREEN if ok else FAIL_RED};')
 
     def _on_event(self, event: Event) -> None:
         logbook.write(f'[{event.status.value}] {event.step}'

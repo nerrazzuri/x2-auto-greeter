@@ -33,7 +33,7 @@ def app():
 
 @pytest.fixture
 def window(app):
-    w = Deployer()
+    w = Deployer(watch_robot=False)
     yield w
     w.deleteLater()
 
@@ -124,13 +124,13 @@ def test_the_window_opens_in_whichever_language_is_set(app):
     before = i18n.language()
     try:
         i18n.set_language('en')
-        english = Deployer()
+        english = Deployer(watch_robot=False)
         assert english.deploy_button.text() == 'Deploy'
         assert '**' not in english.problems.text()
         english.deleteLater()
 
         i18n.set_language('zh')
-        chinese = Deployer()
+        chinese = Deployer(watch_robot=False)
         assert chinese.deploy_button.text() == '开始部署'
         chinese.deleteLater()
     finally:
@@ -144,7 +144,7 @@ def test_the_validation_message_follows_the_language(app):
     try:
         for code, expected in (('en', 'greetings'), ('zh', '句')):
             i18n.set_language(code)
-            window = Deployer()
+            window = Deployer(watch_robot=False)
             window._set_rows(GOOD)
             assert expected in window.problems.text(), code
             window.deleteLater()
@@ -165,7 +165,7 @@ def test_a_failure_is_reported_in_the_language_in_force(app):
     before = i18n.language()
     try:
         i18n.set_language('en')
-        window = Deployer()
+        window = Deployer(watch_robot=False)
         window._on_done(_Outcome())
         assert 'Progress' in window.result.text()
         assert '过程记录' not in window.result.text()
@@ -182,7 +182,7 @@ def test_switching_language_keeps_what_the_customer_typed(app, monkeypatch):
     before = i18n.language()
     try:
         i18n.set_language('zh')
-        window = Deployer()
+        window = Deployer(watch_robot=False)
         window._set_rows(GOOD)
         window.venue.setText('Somewhere Mall')
         window._say('一行记录')
@@ -190,8 +190,8 @@ def test_switching_language_keeps_what_the_customer_typed(app, monkeypatch):
         created = {}
         real = Deployer
 
-        def capture():
-            created['window'] = real()
+        def capture(watch_robot=True):
+            created['window'] = real(watch_robot=False)
             return created['window']
 
         monkeypatch.setattr('deployer.gui.app.Deployer', capture)
@@ -214,7 +214,7 @@ def test_switching_language_keeps_what_the_customer_typed(app, monkeypatch):
 # empty table means "use the standard ones", and the customer is asked first.
 
 def test_the_table_starts_empty(app):
-    window = Deployer()
+    window = Deployer(watch_robot=False)
     try:
         assert window._rows() == []
     finally:
@@ -224,7 +224,7 @@ def test_the_table_starts_empty(app):
 def test_an_empty_table_is_offered_rather_than_refused(app):
     """Not an error to be corrected: it is the default, and the button says so
     instead of greying out with no explanation."""
-    window = Deployer()
+    window = Deployer(watch_robot=False)
     try:
         assert window.deploy_button.isEnabled()
         assert '通用' in window.problems.text()
@@ -235,7 +235,7 @@ def test_an_empty_table_is_offered_rather_than_refused(app):
 def test_deploying_an_empty_table_asks_first(app, monkeypatch):
     """Greeting a customer's visitors in words they never saw is not something
     to do quietly."""
-    window = Deployer()
+    window = Deployer(watch_robot=False)
     try:
         asked = {}
 
@@ -260,7 +260,7 @@ def test_deploying_an_empty_table_asks_first(app, monkeypatch):
 
 
 def test_declining_the_standard_greetings_deploys_nothing(app, monkeypatch):
-    window = Deployer()
+    window = Deployer(watch_robot=False)
     try:
         monkeypatch.setattr('PyQt6.QtWidgets.QMessageBox.exec', lambda _s: 0)
         monkeypatch.setattr(
@@ -346,3 +346,121 @@ def test_a_worker_survives_being_moved_to_a_thread(app, monkeypatch):
     finally:
         thread.quit()
         thread.wait(1000)
+
+
+# -- watching for the robot --------------------------------------------------
+
+def test_the_lamp_and_wording_follow_the_state(app):
+    """Four states, four fixes. The colour is what reads from a metre away,
+    which is where somebody stands while plugging a cable in."""
+    from deployer.core import watch
+
+    window = Deployer(watch_robot=False)
+    try:
+        seen = {}
+        for state in (watch.NO_LINK, watch.WRONG_SUBNET, watch.NO_SSH, watch.READY):
+            identity = 'agi · 1423' if state == watch.READY else None
+            window._on_status(watch.Status(state, f'detail for {state}', identity))
+            seen[state] = (window.lamp.styleSheet(), window.identity.text())
+
+        colours = {s: v[0] for s, v in seen.items()}
+        assert len(set(colours.values())) == 4, '四种状态要有四种颜色'
+        assert 'agi' in seen[watch.READY][1], '连上时要显示是哪一台'
+    finally:
+        window.deleteLater()
+
+
+def test_the_fix_button_appears_only_when_there_is_something_to_fix(app):
+    """The instructions run to eight lines and name a settings panel. In the
+    window they would push everything else off screen; behind a button they
+    are there for the customer who is stuck."""
+    from deployer.core import watch
+
+    window = Deployer(watch_robot=False)
+    try:
+        window._on_status(watch.Status(watch.WRONG_SUBNET, '网段不对\n改这里:…'))
+        assert window.fix_button.isVisible() or window.fix_button.isVisibleTo(window)
+
+        window._on_status(watch.Status(watch.READY, '好了', 'agi'))
+        assert not window.fix_button.isVisibleTo(window)
+    finally:
+        window.deleteLater()
+
+
+def test_the_same_news_does_not_fill_the_log(app):
+    """Polling every two seconds and logging each time would bury the
+    deployment's own output inside a minute."""
+    from deployer.core import watch
+
+    window = Deployer(watch_robot=False)
+    try:
+        window._throttle = watch.Throttle(repeat_s=1000)
+        for _ in range(10):
+            window._on_status(watch.Status(watch.NO_LINK, '没有网线'))
+        assert window.log.toPlainText().count('没有网线') == 1
+    finally:
+        window.deleteLater()
+
+
+def test_the_watcher_thread_starts_and_stops_cleanly(app):
+    """A QThread whose owner is collected before it is stopped aborts the
+    process -- which is what a customer would see as the program crashing on
+    exit."""
+    window = Deployer(watch_robot=True)
+    try:
+        assert window._watch_thread.isRunning()
+        window.stop_watching()
+        assert not window._watch_thread.isRunning()
+        window.stop_watching()               # twice must be safe
+    finally:
+        window.deleteLater()
+
+
+# -- removing it from a robot ------------------------------------------------
+
+def test_uninstalling_asks_first_and_says_what_goes(app, monkeypatch):
+    """It deletes a customer's greetings and their automatic start. Asking is
+    the minimum; saying what survives is what stops them worrying."""
+    window = Deployer(watch_robot=False)
+    try:
+        asked = {}
+        monkeypatch.setattr(
+            'PyQt6.QtWidgets.QMessageBox.exec',
+            lambda box: asked.update(text=box.text(), title=box.windowTitle()))
+        monkeypatch.setattr(
+            'PyQt6.QtWidgets.QMessageBox.clickedButton', lambda _s: None)
+        started = []
+        monkeypatch.setattr(window, '_start', started.append)
+
+        window._uninstall()
+
+        assert asked, '必须先问'
+        assert '完全删除' in asked['text']
+        assert '不受影响' in asked['text'], '要说清楚什么不会被动'
+        assert started == [], '点了取消就不该开始'
+    finally:
+        window.deleteLater()
+
+
+def test_the_uninstall_button_is_not_next_to_the_one_people_want(app):
+    """It is needed rarely and it destroys work. A flat button off to one side
+    is hard to press by accident; a second big button is not."""
+    window = Deployer(watch_robot=False)
+    try:
+        assert window.uninstall_button.isFlat()
+        assert not window.deploy_button.isFlat()
+    finally:
+        window.deleteLater()
+
+
+def test_a_finished_uninstall_says_the_robot_is_otherwise_untouched(app):
+    class _Outcome:
+        ok = True
+
+    window = Deployer(watch_robot=False)
+    try:
+        window._on_uninstalled(_Outcome())
+        assert '不受影响' in window.result.text()
+        assert window.deploy_button.isEnabled(), '卸载完还要能再装回去'
+    finally:
+        window.deleteLater()

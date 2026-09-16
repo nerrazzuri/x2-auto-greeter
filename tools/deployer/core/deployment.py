@@ -252,6 +252,94 @@ class Deployment:
         raise RobotError(t('err.never_ready'))
 
 
+class Uninstall:
+    """Take the greeter off a robot, leaving the robot as it was.
+
+    Everything this deployment ever writes lives under /home/run/x2_greeter
+    and in one systemd unit, which is what makes removal a short list rather
+    than a hunt. Nothing under /agibot is touched -- the vendor's own software
+    was never modified, so there is nothing there to put back.
+
+    The vendor agent's run mode is not restored either, because Phase 1 never
+    changes it. A robot with the greeter removed answers people exactly as it
+    did before the greeter arrived.
+
+    Each step tolerates the thing it removes being absent already: a half
+    finished deployment is the most likely reason somebody is uninstalling.
+    """
+
+    def __init__(self, robot: Robot, listen: Optional[Listener] = None):
+        self.robot = robot
+        self._listen = listen or (lambda event: None)
+
+    def _emit(self, step: str, status: Status, message: str = '') -> None:
+        self._listen(Event(step, status, message))
+
+    def run(self) -> Outcome:
+        outcome = Outcome(ok=False)
+
+        steps = [
+            (t('step.connect'), self._connect),
+            (t('uninstall.stop'), self._stop_service),
+            (t('uninstall.remove_unit'), self._remove_unit),
+            (t('uninstall.remove_files'), self._remove_files),
+            (t('uninstall.verify'), self._verify),
+        ]
+        for name, work in steps:
+            self._emit(name, Status.RUNNING)
+            try:
+                self._emit(name, Status.OK, work())
+            except RobotError as exc:
+                self._emit(name, Status.FAILED, str(exc))
+                return outcome
+            except Exception as exc:                    # noqa: BLE001
+                self._emit(name, Status.FAILED, f'{type(exc).__name__}: {exc}')
+                return outcome
+
+        outcome.ok = True
+        return outcome
+
+    def _connect(self) -> str:
+        self.robot.connect()
+        return str(self.robot.identify())
+
+    def _stop_service(self) -> str:
+        """Disable before stopping, so a unit set to restart does not come
+        back between the two commands."""
+        self.robot.sudo(f'systemctl disable --now {UNIT}')
+        still = self.robot.run(f'systemctl is-active {UNIT}').out.strip()
+        if still == 'active':
+            raise RobotError(t('uninstall.still_running'))
+        return t('uninstall.stopped')
+
+    def _remove_unit(self) -> str:
+        self.robot.sudo(f'rm -f /etc/systemd/system/{UNIT}')
+        self.robot.sudo('systemctl daemon-reload')
+        return t('uninstall.unit_removed')
+
+    def _remove_files(self) -> str:
+        # Spelled out rather than interpolated: this is the one command in the
+        # program that deletes a directory tree on a robot, and it should be
+        # readable as exactly what it is.
+        result = self.robot.run('rm -rf /home/run/x2_greeter')
+        if not result.ok:
+            raise RobotError(t('uninstall.files_failed', detail=result.err.strip()))
+        return t('uninstall.files_removed')
+
+    def _verify(self) -> str:
+        """Ask the robot what is left, rather than trusting the commands.
+
+        Every other failure in this project has looked like success at the
+        point the work was done.
+        """
+        left = self.robot.run(
+            f'ls -d {ROOT} 2>/dev/null; ls /etc/systemd/system/{UNIT} 2>/dev/null; '
+            f'pgrep -f "x2_greeter/lib" | head -1').out.strip()
+        if left:
+            raise RobotError(t('uninstall.leftovers', detail=left.replace('\n', ' ')))
+        return t('uninstall.clean')
+
+
 def _field(line: str, key: str) -> str:
     found = re.search(rf'\b{re.escape(key)}=(\S+)', line)
     return found.group(1) if found else ''
