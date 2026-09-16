@@ -146,6 +146,9 @@ STRINGS: Dict[str, Dict[str, str]] = {
     'weights.downloaded': {'zh': '识别模型已下载到 {path}', 'en': 'Vision model downloaded to {path}'},
     'weights.download_failed_title': {'zh': '下载失败', 'en': 'Download failed'},
     'weights.download_failed': {'zh': '下载失败:{error}', 'en': 'Download failed: {error}'},
+    'weights.blocks_deploy': {
+        'zh': '识别模型还没下载,先点上面的「下载识别模型」。',
+        'en': 'Download the vision model first, with the button above.'},
     'weights.needed': {'zh': '还不能部署', 'en': 'Not ready to deploy'},
     'weights.needed_body': {
         'zh': '请先下载识别模型,机器人需要它来认出人。',

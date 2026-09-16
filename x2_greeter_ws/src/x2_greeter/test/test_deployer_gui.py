@@ -23,12 +23,33 @@ sys.path.insert(0, str(REPO / 'tools'))
 
 from PyQt6.QtWidgets import QApplication              # noqa: E402
 
+from deployer.core import assets                    # noqa: E402
 from deployer.gui.app import Deployer, FAIL_RED, OK_GREEN  # noqa: E402
 
 
 @pytest.fixture(scope='module')
 def app():
     return QApplication.instance() or QApplication([])
+
+
+@pytest.fixture(autouse=True)
+def the_model_is_on_this_machine(monkeypatch, tmp_path):
+    """Every window in this file opens on a machine that has the vision model.
+
+    Without this the suite's result depends on whether this particular laptop
+    happens to have the weights in one of the six places `assets` looks, and
+    it depends on it twice over. The deploy button is dead without them, so
+    every assertion about that button flips; and _deploy() opens a modal
+    QMessageBox.warning, which is a static method that patching
+    QMessageBox.exec does not touch, so offscreen the suite hangs rather than
+    fails while it waits for a click that cannot come.
+
+    Both of those were real: two tests here passed for months on machines that
+    had the model and hung on a fresh checkout. The tests that are actually
+    about the model say so for themselves, below.
+    """
+    monkeypatch.setattr(assets, 'locate',
+                        lambda extra=None: assets.Weights(str(tmp_path), []))
 
 
 @pytest.fixture
@@ -238,20 +259,58 @@ def test_an_empty_table_is_offered_rather_than_refused(app):
         window.deleteLater()
 
 
-def _pretend_the_weights_are_here(window):
-    """Give the window a weights directory before asking it to deploy.
+def _no_model(monkeypatch):
+    """A machine that has never downloaded the weights."""
+    monkeypatch.setattr(
+        assets, 'locate',
+        lambda extra=None: assets.Weights(None, list(assets.NAMES)))
 
-    Any test that calls _deploy() has to, because the first thing _deploy()
-    does without one is open a modal QMessageBox.warning -- a static method,
-    so patching QMessageBox.exec does not touch it, and offscreen it waits for
-    a click that never comes. The suite then hangs rather than fails.
 
-    That is a property of the machine, not of the test: it depends on whether
-    this laptop happens to have the model in one of the six places assets
-    looks. Both tests below passed for months and would have hung on a fresh
-    checkout.
+def test_without_the_model_the_deploy_button_is_dead(app, monkeypatch):
+    """Not a warning after the click -- the button itself.
+
+    Deploying without the model produces a robot that starts, reports itself
+    healthy, and then walks past every person in front of it, because it falls
+    back to a 2005 detector. Nothing about that looks wrong from outside, so
+    it is worth refusing rather than warning about.
     """
-    window._weights_dir = '/tmp'
+    _no_model(monkeypatch)
+    window = Deployer(watch_robot=False)
+    try:
+        window._set_rows(GOOD)
+        assert window._phrases_ok, '问候语本身没问题'
+        assert not window.deploy_button.isEnabled(), '没有模型,部署键应该是灰的'
+        assert window.deploy_button.toolTip(), '灰掉了就要说为什么'
+    finally:
+        window.deleteLater()
+
+
+def test_downloading_the_model_brings_the_deploy_button_back(app, monkeypatch, tmp_path):
+    """The grey button has to come back on its own once the reason is gone."""
+    _no_model(monkeypatch)
+    window = Deployer(watch_robot=False)
+    try:
+        window._set_rows(GOOD)
+        assert not window.deploy_button.isEnabled()
+
+        monkeypatch.setattr(assets, 'locate',
+                            lambda extra=None: assets.Weights(str(tmp_path), []))
+        window._find_weights()
+
+        assert window.deploy_button.isEnabled(), '下载完就该能部署了'
+        assert window.deploy_button.toolTip() == '', '理由没了,提示也该没了'
+    finally:
+        window.deleteLater()
+
+
+def test_the_model_alone_is_not_enough_to_enable_deployment(app, monkeypatch):
+    """Both conditions, not the last one to be evaluated."""
+    window = Deployer(watch_robot=False)          # the model is present
+    try:
+        window._set_rows(['Visit us at **UG**!'])  # but this cannot be spoken
+        assert not window.deploy_button.isEnabled()
+    finally:
+        window.deleteLater()
 
 
 def test_deploying_without_the_model_says_so_and_stops(app, monkeypatch):
@@ -287,7 +346,6 @@ def test_deploying_an_empty_table_asks_first(app, monkeypatch):
     to do quietly."""
     window = Deployer(watch_robot=False)
     try:
-        _pretend_the_weights_are_here(window)
         asked = {}
 
         def fake_exec(box):
@@ -313,7 +371,6 @@ def test_deploying_an_empty_table_asks_first(app, monkeypatch):
 def test_declining_the_standard_greetings_deploys_nothing(app, monkeypatch):
     window = Deployer(watch_robot=False)
     try:
-        _pretend_the_weights_are_here(window)
         monkeypatch.setattr('PyQt6.QtWidgets.QMessageBox.exec', lambda _s: 0)
         monkeypatch.setattr(
             'PyQt6.QtWidgets.QMessageBox.clickedButton', lambda _s: None)

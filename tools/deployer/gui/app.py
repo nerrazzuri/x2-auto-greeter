@@ -212,6 +212,8 @@ class Deployer(QWidget):
 
         self._fix_text = ''
         self._robot_ready = False
+        # Set before _find_weights(), which decides the deploy button with it.
+        self._phrases_ok = False
         # While a deployment runs, the watcher keeps polling but says nothing:
         # its lines every ten seconds would interleave with the steps the
         # customer is actually watching, and the lamp belongs to the outcome.
@@ -563,7 +565,8 @@ class Deployer(QWidget):
             # button says so before acting on it.
             self.problems.setText(t('phrases.will_use_standard'))
             self.problems.setStyleSheet(f'color: {WAIT_GREY};')
-            self.deploy_button.setEnabled(True)
+            self._phrases_ok = True
+            self._refresh_deploy_button()
             return
 
         if not problems:
@@ -579,7 +582,28 @@ class Deployer(QWidget):
             self.problems.setText(f'{head}{more}{tip}')
             self.problems.setStyleSheet(f'color: {FAIL_RED};')
 
-        self.deploy_button.setEnabled(not any(not p.fixable for p in problems))
+        self._phrases_ok = not any(not p.fixable for p in problems)
+        self._refresh_deploy_button()
+
+    def _refresh_deploy_button(self) -> None:
+        """The only place the deploy button is turned on or off.
+
+        Two unrelated things can stop a deployment and either on its own is
+        enough: a greeting the robot cannot say, and a missing vision model.
+        Deciding it in one place is what stops a third condition, later, from
+        leaving a stale True behind in whichever branch forgot about it.
+
+        Without the model the robot still starts and still looks healthy -- it
+        just falls back to a detector that walks past people. That is the worst
+        kind of failure this project has, so it stops the deployment rather
+        than warning about it.
+        """
+        self.deploy_button.setEnabled(self._phrases_ok and bool(self._weights_dir))
+        # Only when the model is the one thing in the way: a grey button whose
+        # reason is about greetings already has that reason above the table.
+        self.deploy_button.setToolTip(
+            t('weights.blocks_deploy')
+            if self._phrases_ok and not self._weights_dir else '')
 
     # -- weights ----------------------------------------------------------
 
@@ -597,6 +621,7 @@ class Deployer(QWidget):
             self.weights_label.setToolTip(t('weights.why'))
             self.download_button.setEnabled(True)
             self.download_button.show()
+        self._refresh_deploy_button()
 
     def _download(self) -> None:
         self.download_button.setEnabled(False)
