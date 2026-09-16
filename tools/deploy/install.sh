@@ -74,8 +74,14 @@ echo "== creating $ROOT on $TARGET"
 ssh "$TARGET" "mkdir -p $ROOT/bin $ROOT/models $ROOT/deps $ROOT/ws/src"
 
 echo "== copying the repository"
+# docs/ is excluded: the design spec and the implementation plan under
+# docs/superpowers are a quarter of a megabyte of how and why this was built,
+# and a robot standing in a client's mall is the last place they need to be.
+# The operator-facing runbooks live in the repository, which is where anyone
+# deploying already is. Tests do ship -- the robot is the only machine with
+# aimdk_msgs, so it is the only place the ros-marked ones can run.
 rsync -a --delete --exclude '.git' --exclude '__pycache__' --exclude '*.pyc' \
-      --exclude 'sdk' "$REPO/" "$TARGET:$ROOT/repo/"
+      --exclude 'sdk' --exclude 'docs' "$REPO/" "$TARGET:$ROOT/repo/"
 
 echo "== copying scripts"
 rsync -a "$HERE/env.sh" "$TARGET:$ROOT/env.sh"

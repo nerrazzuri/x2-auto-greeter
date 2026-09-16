@@ -7,6 +7,7 @@ backend that was meant to be off. Both of those look like a working robot.
 Plain YAML and one stdlib script, so no ROS and no marker -- the same shape as
 test_shipped_config.py.
 """
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -213,3 +214,34 @@ def test_starting_goes_through_systemd_when_the_unit_is_installed():
     code = _code_lines(INSTALL)
     assert 'systemctl start x2-greeter' in code
     assert 'list-unit-files x2-greeter.service' in code
+
+
+# -- what reaches the robot --------------------------------------------------
+
+UNIT = REPO / 'tools' / 'deploy' / 'x2-greeter.service'
+
+
+def test_the_design_documents_are_not_shipped_to_the_robot():
+    """docs/superpowers holds the spec and the plan this was built from. A
+    robot standing in a client's mall is not where they belong, and anyone
+    deploying has the repository in front of them already."""
+    # Continuations joined first: the command is spread over two lines, and
+    # the excludes sit on the other one from the destination.
+    joined = _code_lines(INSTALL).replace('\\\n', ' ')
+    copies = [line for line in joined.splitlines()
+              if 'rsync' in line and '$ROOT/repo/' in line]
+    assert copies, 'the line that copies the repository has moved'
+    assert "--exclude 'docs'" in copies[0], copies[0]
+
+
+def test_nothing_deployed_points_at_a_path_that_is_not_deployed():
+    """The unit file used to name docs/AGENT_BRINGUP_GUIDE.md as a file:// URI
+    under $ROOT/repo. Excluding docs/ turned that into a dangling reference on
+    every robot, which is the kind of thing nobody notices until they follow
+    it."""
+    for path in (UNIT, INSTALL):
+        for reference in re.findall(r'file:///home/run/x2_greeter/repo/(\S+)',
+                                    path.read_text()):
+            assert not reference.startswith('docs/'), (
+                f'{path.name} points at {reference}, which install.sh no '
+                f'longer copies')

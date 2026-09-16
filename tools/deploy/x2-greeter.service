@@ -9,7 +9,7 @@
 # action, with the remote.
 [Unit]
 Description=X2 auto-greeter
-Documentation=file:///home/run/x2_greeter/repo/docs/AGENT_BRINGUP_GUIDE.md
+Documentation=https://github.com/nerrazzuri/x2-auto-greeter/blob/master/docs/AGENT_BRINGUP_GUIDE.md
 # After the robot's own software, which owns the camera and the controller.
 # Wants, not Requires: with the robot stack down the greeter is useless but
 # harmless, and a dependency failure loop helps nobody.
