@@ -131,6 +131,12 @@ STRINGS: Dict[str, Dict[str, str]] = {
               'recognise people. Press Download once, while this computer has '
               'internet; it is kept for next time.'},
     'weights.download': {'zh': '下载识别模型', 'en': 'Download vision model'},
+    'weights.state_ready': {'zh': '识别模型:已就绪', 'en': 'Vision model: Ready'},
+    'weights.state_missing': {'zh': '识别模型:未就绪', 'en': 'Vision model: Not ready'},
+    'weights.why': {
+        'zh': '机器人靠它认出人。请在能上网时下载一次,之后就一直可用。',
+        'en': 'The robot needs it to recognise people. Download once while '
+              'this computer has internet; it is kept for next time.'},
     'weights.downloading': {'zh': '下载 {name} {percent}%', 'en': 'Downloading {name} {percent}%'},
     'weights.downloaded': {'zh': '识别模型已下载到 {path}', 'en': 'Vision model downloaded to {path}'},
     'weights.download_failed_title': {'zh': '下载失败', 'en': 'Download failed'},
@@ -140,9 +146,12 @@ STRINGS: Dict[str, Dict[str, str]] = {
         'zh': '请先下载识别模型,机器人需要它来认出人。',
         'en': 'Download the vision model first — the robot needs it to see people.'},
 
-    'deploy.autostart': {
-        'zh': '机器人开机后自动运行(推荐)',
-        'en': 'Start automatically when the robot boots (recommended)'},
+    'deploy.with_autostart': {
+        'zh': '部署,并让机器人每次开机自动运行(推荐)',
+        'en': 'Deploy, and start it every time the robot boots (recommended)'},
+    'deploy.once': {
+        'zh': '只部署这一次(机器人关机后就不再运行)',
+        'en': 'Deploy once (stops when the robot is powered off)'},
     'deploy.start': {'zh': '开始部署', 'en': 'Deploy'},
     'deploy.idle': {'zh': '尚未开始', 'en': 'Not started'},
     'deploy.begin': {'zh': '—— 开始部署 ——', 'en': '—— Deploying ——'},

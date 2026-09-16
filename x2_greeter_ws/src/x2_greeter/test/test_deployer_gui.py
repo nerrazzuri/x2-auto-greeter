@@ -358,7 +358,13 @@ def test_a_worker_survives_being_moved_to_a_thread(app, monkeypatch):
 
 def test_the_lamp_and_wording_follow_the_state(app):
     """Four states, four fixes. The colour is what reads from a metre away,
-    which is where somebody stands while plugging a cable in."""
+    which is where somebody stands while plugging a cable in.
+
+    The label is a state, not an explanation: "this computer's wired address
+    is 192.168.5.19, which is not on the same network as..." wrapped to six
+    lines and pushed the panel out of shape. That text is in the log, in the
+    fix dialog and on hover.
+    """
     from deployer.core import watch
 
     window = Deployer(watch_robot=False)
@@ -367,11 +373,14 @@ def test_the_lamp_and_wording_follow_the_state(app):
         for state in (watch.NO_LINK, watch.WRONG_SUBNET, watch.NO_SSH, watch.READY):
             identity = 'agi · 1423' if state == watch.READY else None
             window._on_status(watch.Status(state, f'detail for {state}', identity))
-            seen[state] = (window.lamp.styleSheet(), window.identity.text())
+            seen[state] = (window.lamp.styleSheet(), window.identity.text(),
+                           window.identity.toolTip())
 
-        colours = {s: v[0] for s, v in seen.items()}
-        assert len(set(colours.values())) == 4, '四种状态要有四种颜色'
-        assert 'agi' in seen[watch.READY][1], '连上时要显示是哪一台'
+        assert len({v[0] for v in seen.values()}) == 4, '四种状态要有四种颜色'
+        assert len({v[1] for v in seen.values()}) == 4, '四种状态要有四种说法'
+        for state, (_, label, _tip) in seen.items():
+            assert len(label) < 30, f'{state} 的状态标签太长了:{label!r}'
+        assert 'agi' in seen[watch.READY][2], '是哪一台,鼠标悬停要看得到'
     finally:
         window.deleteLater()
 
@@ -486,5 +495,68 @@ def test_a_finished_uninstall_says_the_robot_is_otherwise_untouched(app):
         window._on_uninstalled(_Outcome())
         assert '不受影响' in window.result.text()
         assert window.deploy_button.isEnabled(), '卸载完还要能再装回去'
+    finally:
+        window.deleteLater()
+
+
+def test_every_log_row_states_its_own_colour(app):
+    """A row with no explicit foreground takes whatever the palette gives it,
+    and on the customer's desktop that turned ordinary progress lines red."""
+    from PyQt6.QtGui import QColor
+
+    window = Deployer(watch_robot=False)
+    try:
+        for kind in ('info', 'ok', 'fail', 'warn', 'something-new'):
+            window._say(f'line for {kind}', kind)
+
+        colours = set()
+        for i in range(window.log.count()):
+            brush = window.log.item(i).foreground()
+            assert brush.style() != 0, '每一行都要自己指定颜色'
+            colours.add(brush.color().name())
+        assert QColor(window.LOG_COLOURS['ok']).name() in colours
+        assert QColor(window.LOG_COLOURS['fail']).name() in colours
+    finally:
+        window.deleteLater()
+
+
+def test_deploying_offers_the_two_outcomes_rather_than_a_checkbox(app):
+    """"Start automatically when the robot boots" asked the customer to decide
+    before they knew they were being asked. Two sentences at the moment of
+    pressing say what each one leaves behind."""
+    window = Deployer(watch_robot=False)
+    try:
+        assert not hasattr(window, 'autostart'), '复选框应该没有了'
+        titles = [a.text() for a in window.deploy_button.menu().actions()]
+        assert len(titles) == 2
+        assert any('开机' in x or 'boots' in x for x in titles)
+        assert any('这一次' in x or 'once' in x for x in titles)
+    finally:
+        window.deleteLater()
+
+
+def test_the_choice_reaches_the_plan(app, monkeypatch):
+    window = Deployer(watch_robot=False)
+    try:
+        window._set_rows(GOOD)
+        window._weights_dir = '/tmp'
+        from PyQt6.QtCore import QObject, pyqtSignal
+
+        class FakeWorker(QObject):
+            reported = pyqtSignal(object)
+            done = pyqtSignal(object)
+
+        plans = []
+
+        def capture(robot, plan):
+            plans.append(plan)
+            return FakeWorker()
+
+        monkeypatch.setattr('deployer.gui.app.DeployWorker', capture)
+        monkeypatch.setattr(window, '_start', lambda _w: None)
+
+        window._deploy(True)
+        window._deploy(False)
+        assert [p.install_service for p in plans] == [True, False]
     finally:
         window.deleteLater()

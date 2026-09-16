@@ -26,7 +26,7 @@ from typing import List, Optional
 from PyQt6.QtCore import QObject, Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
-    QApplication, QCheckBox, QFileDialog, QGroupBox, QHBoxLayout,
+    QApplication, QFileDialog, QGroupBox, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu,
     QMessageBox, QProgressBar, QPushButton, QSizePolicy, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget)
@@ -56,6 +56,7 @@ def _package_root() -> Path:
 
 PACKAGE_ROOT = _package_root()
 
+INK = '#1d252b'
 OK_GREEN = '#2c6a45'
 FAIL_RED = '#a6332a'
 AMBER = '#9c6b1a'
@@ -193,6 +194,16 @@ class Deployer(QWidget):
 
         layout.addWidget(self._log_box(), stretch=2)
 
+        # Across the bottom, under the log it summarises. In the narrow column
+        # it was a short bar in a panel of its own, easy to miss and easy to
+        # mistake for something broken while it sat empty.
+        self.progress = QProgressBar()
+        self.progress.setTextVisible(True)
+        self.progress.setFormat(t('deploy.idle'))
+        self.progress.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                    QSizePolicy.Policy.Fixed)
+        layout.addWidget(self.progress)
+
         self._fix_text = ''
         self._robot_ready = False
         self._watching = watch_robot
@@ -249,7 +260,7 @@ class Deployer(QWidget):
         other = LANGUAGES[(LANGUAGES.index(language()) + 1) % len(LANGUAGES)]
         carried = (self._rows(), self.venue.text(),
                    [self.log.item(i).text() for i in range(self.log.count())],
-                   self.identity.text(), self.autostart.isChecked())
+                   self.identity.text())
         set_language(other)
 
         # The new window watches if this one did: a language switch is not a
@@ -260,7 +271,6 @@ class Deployer(QWidget):
         for line in carried[2]:
             fresh.log.addItem(line)
         fresh.identity.setText(carried[3])
-        fresh.autostart.setChecked(carried[4])
         fresh.resize(self.size())
         fresh.move(self.pos())
         fresh.show()
@@ -283,13 +293,15 @@ class Deployer(QWidget):
         box = QGroupBox(t('section.robot'))
         outer = QVBoxLayout(box)
 
+        # One row: a dot, a state, and the way out of it. The explanation --
+        # which address this computer has, and which panel to change it in --
+        # used to be the label, and wrapped to six lines that pushed the panel
+        # out of shape. It goes to the progress log and the fix dialog, where
+        # there is room for it.
         line = QHBoxLayout()
-        # A dot rather than an icon: it has to read at a glance from a metre
-        # away, which is where somebody stands while plugging a cable in.
         self.lamp = QLabel('●')
         self.lamp.setStyleSheet(f'color: {WAIT_GREY}; font-size: 20px;')
         self.identity = QLabel(t('watch.label_no_link'))
-        self.identity.setWordWrap(True)
         self.identity.setStyleSheet(f'color: {WAIT_GREY};')
         self.fix_button = QPushButton(t('watch.how_to_fix'))
         self.fix_button.clicked.connect(self._show_fix)
@@ -362,34 +374,35 @@ class Deployer(QWidget):
         box = QGroupBox(t('section.deploy'))
         outer = QVBoxLayout(box)
 
-        row = QHBoxLayout()
+        # A state on its own line, and the button only when it is the answer.
+        # The path used to be in the label, and inside the packaged program
+        # that path is the temporary directory it unpacked itself into --
+        # meaningless to a customer and long enough to break the panel.
         self.weights_label = QLabel()
-        self.weights_label.setWordWrap(True)
+        outer.addWidget(self.weights_label)
+
         self.download_button = QPushButton(t('weights.download'))
         self.download_button.clicked.connect(self._download)
-        row.addWidget(self.weights_label, stretch=1)
-        row.addWidget(self.download_button)
-        outer.addLayout(row)
+        self.download_button.hide()
+        outer.addWidget(self.download_button)
 
-        self.autostart = QCheckBox(t('deploy.autostart'))
-        self.autostart.setChecked(True)
-        outer.addWidget(self.autostart)
-
+        # The choice lives on the button rather than in a checkbox above it.
+        # "Start automatically when the robot boots" asked the customer to
+        # decide something before they knew it was being asked; two sentences
+        # at the moment of pressing say what each one leaves behind.
         self.deploy_button = QPushButton(t('deploy.start'))
         self.deploy_button.setMinimumHeight(44)
         font = QFont(self.deploy_button.font())
         font.setPointSize(font.pointSize() + 2)
         font.setBold(True)
         self.deploy_button.setFont(font)
-        self.deploy_button.clicked.connect(self._deploy)
+        menu = QMenu(self)
+        self.autostart_action = menu.addAction(t('deploy.with_autostart'))
+        self.autostart_action.triggered.connect(lambda: self._deploy(True))
+        self.once_action = menu.addAction(t('deploy.once'))
+        self.once_action.triggered.connect(lambda: self._deploy(False))
+        self.deploy_button.setMenu(menu)
         outer.addWidget(self.deploy_button)
-
-        self.progress = QProgressBar()
-        self.progress.setTextVisible(True)
-        self.progress.setFormat(t('deploy.idle'))
-        self.progress.setSizePolicy(QSizePolicy.Policy.Expanding,
-                                    QSizePolicy.Policy.Fixed)
-        outer.addWidget(self.progress)
 
         self.result = QLabel()
         self.result.setWordWrap(True)
@@ -534,13 +547,16 @@ class Deployer(QWidget):
         found = assets.locate()
         self._weights_dir = found.directory
         if found.ready:
-            self.weights_label.setText(t('weights.ready', path=found.directory))
+            self.weights_label.setText(t('weights.state_ready'))
             self.weights_label.setStyleSheet(f'color: {OK_GREEN};')
-            self.download_button.setEnabled(False)
+            self.weights_label.setToolTip(found.directory or '')
+            self.download_button.hide()
         else:
-            self.weights_label.setText(t('weights.missing'))
+            self.weights_label.setText(t('weights.state_missing'))
             self.weights_label.setStyleSheet(f'color: {FAIL_RED};')
+            self.weights_label.setToolTip(t('weights.why'))
             self.download_button.setEnabled(True)
+            self.download_button.show()
 
     def _download(self) -> None:
         self.download_button.setEnabled(False)
@@ -586,14 +602,16 @@ class Deployer(QWidget):
         colour = colours.get(status.state, WAIT_GREY)
         self.lamp.setStyleSheet(f'color: {colour}; font-size: 20px;')
 
-        headline, _, rest = status.detail.partition('\n')
-        if status.ready:
-            headline = f'✓ {status.identity}'
-        self.identity.setText(headline)
+        labels = {watch.NO_LINK: 'watch.label_no_link',
+                  watch.WRONG_SUBNET: 'watch.label_wrong_subnet',
+                  watch.NO_SSH: 'watch.label_no_ssh',
+                  watch.READY: 'watch.label_ready'}
+        self.identity.setText(t(labels.get(status.state, 'watch.label_no_link')))
         self.identity.setStyleSheet(f'color: {colour};')
+        self.identity.setToolTip(str(status.identity or status.detail))
 
-        self._fix_text = rest
-        self.fix_button.setVisible(bool(rest))
+        self._fix_text = status.detail
+        self.fix_button.setVisible(not status.ready)
 
         self._robot_ready = status.ready
         self.uninstall_action.setEnabled(status.ready)
@@ -623,7 +641,7 @@ class Deployer(QWidget):
 
     # -- deploying --------------------------------------------------------
 
-    def _deploy(self) -> None:
+    def _deploy(self, install_service: bool = True) -> None:
         if not self._weights_dir:
             QMessageBox.warning(self, t('weights.needed'), t('weights.needed_body'))
             return
@@ -638,14 +656,14 @@ class Deployer(QWidget):
         self.result.setText('')
         self.progress.setValue(0)
         self._steps_done = 0
-        self._steps_total = 8 if self.autostart.isChecked() else 5
+        self._steps_total = 8 if install_service else 7
 
         robot = Robot(DEFAULT_HOST, DEFAULT_USER, DEFAULT_PASSWORD)
         plan = Plan(package_dir=str(PACKAGE_ROOT),
                     phrases=phrases,
                     weights_dir=self._weights_dir,
                     venue=self.venue.text().strip(),
-                    install_service=self.autostart.isChecked(),
+                    install_service=install_service,
                     start_after=True)
 
         worker = DeployWorker(robot, plan)
@@ -754,7 +772,8 @@ class Deployer(QWidget):
 
     # -- plumbing ---------------------------------------------------------
 
-    LOG_COLOURS = {'ok': OK_GREEN, 'fail': FAIL_RED, 'warn': AMBER}
+    LOG_COLOURS = {'ok': OK_GREEN, 'fail': FAIL_RED, 'warn': AMBER,
+                   'info': INK}
 
     def _say(self, text: str, kind: str = 'info') -> None:
         """One line in the panel, and the whole thing in the file.
@@ -768,8 +787,7 @@ class Deployer(QWidget):
         first = text.splitlines()[0] if text else ''
         stamp = datetime.datetime.now().strftime('%H:%M:%S')
         item = QListWidgetItem(f'{stamp}   {first}')
-        if kind in self.LOG_COLOURS:
-            item.setForeground(QColor(self.LOG_COLOURS[kind]))
+        item.setForeground(QColor(self.LOG_COLOURS.get(kind, INK)))
         if len(text.splitlines()) > 1:
             item.setToolTip(text)          # the rest, on hover
         self.log.addItem(item)
