@@ -227,6 +227,9 @@ STRINGS: Dict[str, Dict[str, str]] = {
     'step.phrase_count': {'zh': '{count} 句问候语', 'en': '{count} greetings'},
     'step.autostart_on': {'zh': '开机后会自动运行', 'en': 'will start on boot'},
     'step.started': {'zh': '已启动', 'en': 'started'},
+    'step.started_not_on_boot': {
+        'zh': '已启动;已取消开机自动运行',
+        'en': 'started; will no longer start on boot'},
     'step.waiting_camera': {'zh': '等待相机启动…', 'en': 'Waiting for the camera…'},
 
     # -- uninstalling -------------------------------------------------------
@@ -288,6 +291,9 @@ STRINGS: Dict[str, Dict[str, str]] = {
         'en': 'The settings file was not created — the build may not have finished.'},
     'err.service': {'zh': '装开机自启失败:{detail}', 'en': 'Could not set up automatic start: {detail}'},
     'err.start': {'zh': '启动失败:{detail}', 'en': 'Could not start: {detail}'},
+    'err.scripts': {
+        'zh': '机器人上的启动脚本没装上:{detail}',
+        'en': 'Could not install the start scripts on the robot: {detail}'},
     'err.wrong_config': {
         'zh': '机器人起来了,但配置不对:{detail}',
         'en': 'The robot started, but with the wrong settings: {detail}'},

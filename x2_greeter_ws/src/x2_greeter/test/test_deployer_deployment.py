@@ -45,14 +45,20 @@ SHIPPED_SITE = """\
 class FakeRobot:
     """Answers what the deployment asks, and remembers the order it asked."""
 
-    def __init__(self, *, startup_line=GOOD_LINE, build_ok=True, sudo_ok=True):
+    def __init__(self, *, startup_line=GOOD_LINE, build_ok=True, sudo_ok=True,
+                 unit_installed=False, start_ok=True, scripts_ok=True):
         self.calls = []
+        self.commands = []            # in full, where `calls` is abbreviated
         self.files = {f'{R.ROOT}/ws/install/x2_greeter/share/x2_greeter/config/'
                       'greeter.yaml': SHIPPED_SITE,
                       f'{R.ROOT}/repo/tools/deploy/x2-greeter.service': '[Unit]\n'}
+        if unit_installed:            # left behind by an earlier permanent deploy
+            self.files['/etc/systemd/system/x2-greeter.service'] = '[Unit]\n'
         self.startup_line = startup_line
         self.build_ok = build_ok
         self.sudo_ok = sudo_ok
+        self.start_ok = start_ok
+        self.scripts_ok = scripts_ok
         self.mirrored = None
 
     def connect(self):
@@ -87,6 +93,18 @@ class FakeRobot:
 
     def run(self, command, timeout=None):
         self.calls.append(f'run {command.strip().splitlines()[0][:40]}')
+        self.commands.append(command)
+        if 'bin/start.sh' in command:
+            self.calls[-1] = 'run start.sh'
+            return R.Result(0 if self.start_ok else 1, '',
+                            '' if self.start_ok else '== FAILED to start')
+        if 'bin/stop.sh' in command:
+            self.calls[-1] = 'run stop.sh'
+            return R.Result(0, '== greeter stopped', '')
+        if f'{R.ROOT}/env.sh' in command and 'cp ' in command:
+            self.calls[-1] = 'run install scripts'
+            return R.Result(0 if self.scripts_ok else 1, '',
+                            '' if self.scripts_ok else 'cp: No such file')
         if 'colcon build' in command:
             self.calls[-1] = 'run colcon build'
             return R.Result(0 if self.build_ok else 1,
@@ -101,6 +119,7 @@ class FakeRobot:
 
     def sudo(self, command, timeout=None):
         self.calls.append(f'sudo {command}')
+        self.commands.append(command)
         return R.Result(0 if self.sudo_ok else 1, '', ''
                         if self.sudo_ok else 'not in the sudoers file')
 
@@ -168,6 +187,99 @@ def test_starting_uses_restart_so_a_redeploy_is_not_silently_ignored(weights):
     run_full(fake, weights)
     assert 'sudo systemctl restart x2-greeter.service' in fake.calls
     assert not any(c.startswith('sudo systemctl start') for c in fake.calls)
+
+
+def _index(calls, wanted):
+    found = [i for i, c in enumerate(calls) if c == wanted or c.startswith(wanted)]
+    assert found, f'{wanted!r} never happened: {calls}'
+    return found[0]
+
+
+def test_deploying_once_to_a_robot_that_never_had_the_service_starts_it_by_hand(weights):
+    """What a customer hit: "Deploy once" skips installing the unit and then
+    asked systemd to restart it, on a robot where it had never existed."""
+    fake = FakeRobot(unit_installed=False)
+    outcome, events = run_full(fake, weights, install_service=False)
+
+    assert outcome.ok, [e.message for e in events if e.status is Status.FAILED]
+    assert 'run start.sh' in fake.calls
+    assert not any('systemctl' in c for c in fake.calls), \
+        '没装服务就不该碰 systemctl'
+
+    # start.sh backgrounds the greeter with nohup. Without stdin from
+    # /dev/null the greeter inherits the SSH channel, and the command does not
+    # return until the greeter exits -- that is, never. Only a real robot
+    # shows the hang, so the command itself is what can be held to it here.
+    start = [c for c in fake.commands if 'bin/start.sh' in c][0]
+    assert '< /dev/null' in start
+
+
+def test_deploying_once_over_a_permanent_install_turns_boot_start_off(weights):
+    """"Deploy once" promises the greeter will not come back after a power
+    cycle. An enabled unit from an earlier permanent deploy would break that
+    promise, and a running one would be restarted by systemd thirty seconds
+    after start.sh killed it -- two greeters talking over each other."""
+    fake = FakeRobot(unit_installed=True)
+    outcome, events = run_full(fake, weights, install_service=False)
+
+    assert outcome.ok
+    disable = _index(fake.calls, 'sudo systemctl disable --now x2-greeter.service')
+    assert disable < _index(fake.calls, 'run start.sh'), '要先关掉服务再手动启动'
+    started = [e for e in events if e.status is Status.OK and e.step == '启动机器人程序']
+    assert started and '开机' in started[0].message, '取消了开机自启要说出来'
+
+
+def test_deploying_permanently_stops_a_greeter_started_by_hand_first(weights):
+    """The mirror image: after "Deploy once", a greeter is running outside
+    systemd, and restarting the service would add a second one beside it."""
+    fake = FakeRobot()
+    outcome, _ = run_full(fake, weights, install_service=True)
+
+    assert outcome.ok
+    assert _index(fake.calls, 'run stop.sh') < \
+        _index(fake.calls, 'sudo systemctl restart x2-greeter.service')
+    assert 'run start.sh' not in fake.calls
+
+
+def test_a_greeter_that_will_not_start_by_hand_is_a_failure(weights):
+    outcome, events = run_full(FakeRobot(start_ok=False), weights,
+                               install_service=False)
+    assert not outcome.ok
+    failed = [e for e in events if e.status is Status.FAILED][0]
+    assert failed.step == '启动机器人程序'
+    assert 'FAILED to start' in failed.message
+
+
+def test_the_scripts_the_robot_runs_are_installed_with_the_package(weights):
+    """The unit runs bin/service.sh, "Deploy once" runs bin/start.sh, and the
+    build sources env.sh. The command-line installer copied all of them; this
+    deployment never did, and only worked on robots the installer had already
+    been to."""
+    fake = FakeRobot()
+    run_full(fake, weights)
+
+    install = _index(fake.calls, 'run install scripts')
+    assert _index(fake.calls, 'mirror') < install < _index(fake.calls, 'run colcon build')
+    command = [c for c in fake.commands if f'{R.ROOT}/env.sh' in c and 'cp ' in c][0]
+    for script in ('start.sh', 'stop.sh', 'service.sh', 'uninstall.sh'):
+        assert f'tools/deploy/{script}' in command, f'{script} 没装'
+    assert 'chmod +x' in command
+
+
+def test_every_script_the_deployment_installs_is_really_in_the_package():
+    """Checked against the repository, not the fake: a renamed script would
+    pass every test above and fail on the robot."""
+    from deployer.core import deployment as D
+
+    for name in ('env.sh', *D.SCRIPTS):
+        assert (REPO / 'tools' / 'deploy' / name).is_file(), name
+
+
+def test_scripts_that_fail_to_install_stop_the_deployment(weights):
+    fake = FakeRobot(scripts_ok=False)
+    outcome, _ = run_full(fake, weights)
+    assert not outcome.ok
+    assert 'run colcon build' not in fake.calls, '脚本没装上就不该往下编译'
 
 
 # -- the refusals ------------------------------------------------------------
@@ -268,15 +380,19 @@ def test_an_empty_greeting_list_never_reaches_a_robot():
 class UninstallRobot(FakeRobot):
     """Answers as a robot with a deployment on it, then as one without."""
 
-    def __init__(self, *, leftovers='', stop_fails=False, **kw):
+    def __init__(self, *, leftovers='', stop_fails=False, survivor=False, **kw):
         super().__init__(**kw)
         self.leftovers = leftovers
         self.stop_fails = stop_fails
+        self.survivor = survivor          # a greeter that outlives pkill
 
     def run(self, command, timeout=None):
         self.calls.append(f'run {command[:60]}')
+        self.commands.append(command)
         if command.startswith('systemctl is-active'):
             return R.Result(0, 'active' if self.stop_fails else 'inactive', '')
+        if command.startswith('pkill'):
+            return R.Result(0, '31337' if self.survivor else '', '')
         if command.startswith('ls -d'):
             return R.Result(0, self.leftovers, '')
         return R.Result(0, '', '')
@@ -342,3 +458,85 @@ def test_the_vendor_agent_is_left_alone(weights):
     fake = UninstallRobot()
     uninstall(fake)
     assert not any('AgentProperties' in c or 'run_mode' in c for c in fake.calls)
+
+
+def test_uninstall_stops_a_greeter_started_by_hand(weights):
+    """"Deploy once" starts the greeter from bin/start.sh, outside systemd, so
+    disabling the service does not touch it. Deleting its files under it
+    leaves a greeter running from a directory that no longer exists."""
+    fake = UninstallRobot()
+    outcome, _ = uninstall(fake)
+    assert outcome.ok
+    kill = [i for i, c in enumerate(fake.calls) if c.startswith('run pkill')]
+    delete = [i for i, c in enumerate(fake.calls) if 'rm -rf' in c]
+    assert kill, '没有停手动启动的迎宾程序'
+    assert kill[0] < delete[0]
+
+
+def test_a_greeter_that_survives_being_stopped_deletes_nothing(weights):
+    fake = UninstallRobot(survivor=True)
+    outcome, events = uninstall(fake)
+    assert not outcome.ok
+    assert not any('rm -rf' in c for c in fake.calls), '还在跑就不该删文件'
+
+
+# -- the commands themselves, run for real -----------------------------------
+#
+# FakeRobot answers whatever it is told to. That is how the check below went
+# to a robot unable ever to pass: over SSH every command runs as
+# `bash -c "<the whole command>"`, so a pgrep for a literal "x2_greeter/lib"
+# finds the bash running it, and reported that as a greeter left behind. No
+# fake can see that. Running the exact command through bash on this machine
+# can.
+
+def _captured(work):
+    """The commands an Uninstall step sends, without a robot."""
+    from deployer.core.deployment import Uninstall
+
+    robot = UninstallRobot()
+    work(Uninstall(robot))
+    return [c for c in robot.commands if 'pgrep' in c or 'pkill' in c]
+
+
+def _harmless(command, tmp_path):
+    """The same command, pointed away from anything real on this machine."""
+    return (command.replace(R.ROOT, str(tmp_path / 'not-installed'))
+                   .replace('/etc/systemd/system/x2-greeter.service',
+                            str(tmp_path / 'no.service')))
+
+
+def _real_greeter_running():
+    import subprocess
+    # pgrep's own argv is excluded by pgrep, and pytest's does not contain it.
+    return subprocess.run(['pgrep', '-f', 'x2_greeter/lib'],
+                          capture_output=True).returncode == 0
+
+
+needs_bash = pytest.mark.skipif(
+    sys.platform != 'linux' or _real_greeter_running(),
+    reason='needs bash and pgrep, and no greeter really running here')
+
+
+@needs_bash
+def test_the_leftover_check_does_not_find_itself(tmp_path):
+    import subprocess
+
+    [command] = _captured(lambda u: u._verify())
+    ran = subprocess.run(['bash', '-c', _harmless(command, tmp_path)],
+                         capture_output=True, text=True, timeout=30)
+    assert ran.stdout.strip() == '', \
+        f'什么都没装,检查却找到了:{ran.stdout.strip()}(是它自己的 bash)'
+
+
+@needs_bash
+def test_the_stop_command_does_not_kill_itself(tmp_path):
+    """pkill -f matching its own bash kills the command halfway, which looks
+    from the other end like a dropped connection."""
+    import subprocess
+
+    [command] = _captured(lambda u: u._stop_service())
+    ran = subprocess.run(['bash', '-c', _harmless(command, tmp_path)],
+                         capture_output=True, text=True, timeout=30)
+    assert ran.returncode >= 0, f'被信号 {-ran.returncode} 杀掉了'
+    assert ran.stdout.strip() == '', f'报告还有进程:{ran.stdout.strip()}'
+

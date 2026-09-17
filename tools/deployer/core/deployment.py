@@ -33,6 +33,20 @@ REPO = f'{ROOT}/repo'
 SITE = f'{ROOT}/site.yaml'
 MODELS = f'{ROOT}/models'
 UNIT = 'x2-greeter.service'
+UNIT_FILE = f'/etc/systemd/system/{UNIT}'
+# What the robot itself runs, copied out of the uploaded repository: the unit
+# runs service.sh, "Deploy once" runs start.sh, and uninstalling runs stop.sh.
+SCRIPTS = ('start.sh', 'stop.sh', 'service.sh', 'uninstall.sh')
+
+# Process patterns for `pgrep -f` / `pkill -f` sent over SSH. Every command
+# there runs as `bash -c "<the whole command>"`, so a pattern written out
+# literally matches the bash running it: the uninstall check used to find its
+# own shell and report it as a greeter left behind, on every robot, every
+# time. The brackets match the same process names without the command
+# containing them. (bin/stop.sh does not need this: it runs as a file, and its
+# command line is just its path.)
+GREETER_PROCESS = 'x2_greeter/li[b]'
+LAUNCH_PROCESS = 'greeter[.]launch'
 
 # What the robot has to say for itself before a deployment counts as done.
 WANTED = {'camera': 'stereo', 'backend': 'canned', 'speech_tier': 'tts'}
@@ -146,7 +160,29 @@ class Deployment:
 
     def _upload_package(self) -> str:
         sent = self.robot.mirror(self.plan.package_dir, REPO)
+        self._install_scripts()
         return t('step.files', count=sent)
+
+    def _install_scripts(self) -> None:
+        """env.sh and bin/, which the rest of the deployment depends on.
+
+        tools/deploy/install.sh has always copied these. This deployment never
+        did, and it went unnoticed because every robot it had been pointed at
+        had been through install.sh first and still had them: the build
+        sourced an env.sh that happened to be there, and the unit ran a
+        service.sh that happened to be there. On a robot fresh from the
+        factory, both would have failed.
+        """
+        sources = ' '.join(f'{REPO}/tools/deploy/{name}' for name in SCRIPTS)
+        result = self.robot.run(
+            f'set -e\n'
+            f'mkdir -p {ROOT}/bin {MODELS}\n'
+            f'cp {REPO}/tools/deploy/env.sh {ROOT}/env.sh\n'
+            f'cp {sources} {ROOT}/bin/\n'
+            f'chmod +x {ROOT}/bin/*.sh')
+        if not result.ok:
+            raise RobotError(t('err.scripts',
+                                detail=result.err.strip() or result.out.strip()))
 
     def _upload_weights(self) -> str:
         import os
@@ -215,6 +251,23 @@ class Deployment:
         return t('step.autostart_on')
 
     def _start(self) -> str:
+        """Start the greeter the way the customer chose to deploy it.
+
+        There are two ways a greeter can be running on a robot -- under
+        systemd, or by hand from bin/start.sh -- and whichever one is not
+        chosen has to be put out of the way first, or the robot ends up with
+        two greeters talking over each other.
+        """
+        if self.plan.install_service:
+            return self._start_under_systemd()
+        return self._start_by_hand()
+
+    def _start_under_systemd(self) -> str:
+        # A greeter left running by an earlier "Deploy once" is not systemd's,
+        # so restarting the service would start a second one beside it.
+        stopped = self.robot.run(f'{ROOT}/bin/stop.sh', timeout=60)
+        if not stopped.ok:
+            raise RobotError(t('err.start', detail=_tail(stopped)))
         # restart, not start: `start` on a service that is already running does
         # nothing, and a redeploy would leave the old greeting list in place
         # while reporting success.
@@ -222,6 +275,31 @@ class Deployment:
         if not result.ok:
             raise RobotError(t('err.start', detail=result.err.strip()))
         return t('step.started')
+
+    def _start_by_hand(self) -> str:
+        """"Deploy once": running now, and not after the next power cycle.
+
+        This used to ask systemd to restart a unit that "Deploy once" had
+        deliberately not installed, which on a robot that had never been
+        deployed permanently failed with "Unit x2-greeter.service not found".
+
+        A unit left enabled by an earlier permanent deploy is switched off
+        first. Left alone it would break the promise this option makes, and
+        if it was running, systemd would restart it thirty seconds after
+        start.sh killed it.
+        """
+        was_permanent = self.robot.exists(UNIT_FILE)
+        if was_permanent:
+            result = self.robot.sudo(f'systemctl disable --now {UNIT}', timeout=60)
+            if not result.ok:
+                raise RobotError(t('err.start', detail=result.err.strip()))
+
+        # stdin from /dev/null, so the backgrounded greeter does not inherit
+        # the SSH channel and hold this command open until it exits.
+        result = self.robot.run(f'bash {ROOT}/bin/start.sh < /dev/null', timeout=120)
+        if not result.ok:
+            raise RobotError(t('err.start', detail=_tail(result)))
+        return t('step.started_not_on_boot' if was_permanent else 'step.started')
 
     _startup_line: Optional[str] = None
 
@@ -250,6 +328,12 @@ class Deployment:
             self._emit(t('step.verify'), Status.INFO, t('step.waiting_camera'))
             time.sleep(POLL_S)
         raise RobotError(t('err.never_ready'))
+
+
+def _tail(result, lines: int = 6) -> str:
+    """The end of what a script said, which is where it says why it failed."""
+    text = (result.err.strip() + '\n' + result.out.strip()).strip()
+    return '\n'.join(text.splitlines()[-lines:])
 
 
 class Uninstall:
@@ -305,10 +389,24 @@ class Uninstall:
 
     def _stop_service(self) -> str:
         """Disable before stopping, so a unit set to restart does not come
-        back between the two commands."""
+        back between the two commands.
+
+        Then any greeter started by hand. "Deploy once" runs it from
+        bin/start.sh, outside systemd, so disabling the unit leaves it
+        running -- from a directory about to be deleted. Killed directly
+        rather than through bin/stop.sh, because a half finished deployment
+        is the likeliest reason to be here and may never have installed it.
+        """
         self.robot.sudo(f'systemctl disable --now {UNIT}')
         still = self.robot.run(f'systemctl is-active {UNIT}').out.strip()
         if still == 'active':
+            raise RobotError(t('uninstall.still_running'))
+
+        survivor = self.robot.run(
+            f'pkill -f "{LAUNCH_PROCESS}"; pkill -f "{GREETER_PROCESS}"; sleep 2; '
+            f'pkill -9 -f "{GREETER_PROCESS}"; sleep 1; '
+            f'pgrep -f "{GREETER_PROCESS}" | head -1', timeout=30).out.strip()
+        if survivor:
             raise RobotError(t('uninstall.still_running'))
         return t('uninstall.stopped')
 
@@ -334,7 +432,7 @@ class Uninstall:
         """
         left = self.robot.run(
             f'ls -d {ROOT} 2>/dev/null; ls /etc/systemd/system/{UNIT} 2>/dev/null; '
-            f'pgrep -f "x2_greeter/lib" | head -1').out.strip()
+            f'pgrep -f "{GREETER_PROCESS}" | head -1').out.strip()
         if left:
             raise RobotError(t('uninstall.leftovers', detail=left.replace('\n', ' ')))
         return t('uninstall.clean')

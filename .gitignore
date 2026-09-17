@@ -31,6 +31,6 @@ assets/audio/*.pcm
 
 # Built by tools/deployer/build.py. Rebuilt per platform, never committed:
 # a 79 MB binary in git history is 79 MB in every clone, forever.
-/部署工具-Linux
-/部署工具-Windows.exe
+/X2AutoGreeter-Linux
+/X2AutoGreeter-Windows.exe
 tools/deployer/build/

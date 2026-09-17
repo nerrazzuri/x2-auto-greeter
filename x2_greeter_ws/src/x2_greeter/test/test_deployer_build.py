@@ -67,3 +67,15 @@ def test_the_documents_name_the_file_that_is_actually_built(document, monkeypatc
     for system in ('Windows', 'Linux'):
         name = _name_on(system, monkeypatch)
         assert name in text, f'{document} 里没有提到 {name}'
+
+
+@pytest.mark.parametrize('system', ['Windows', 'Linux'])
+def test_the_executable_is_never_committed(system, monkeypatch):
+    """Eighty megabytes that compress to seventy-nine. Renaming it once
+    already left the old name in .gitignore and the new file one `git add`
+    away from the history for good."""
+    name = _name_on(system, monkeypatch)
+    produced = name + ('.exe' if system == 'Windows' else '')
+    ignored = (REPO / '.gitignore').read_text(encoding='utf-8').splitlines()
+    assert f'/{produced}' in ignored, f'.gitignore 没有忽略 {produced}'
+
