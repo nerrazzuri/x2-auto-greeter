@@ -20,14 +20,24 @@ from __future__ import annotations
 import random
 from typing import Optional, Sequence
 
+#: What opens a voice session on the X2. It was "Hi Lumi" until 2026-09-17;
+#: the robots answer to 灵犀灵犀, said twice. Written out here once, and the
+#: invitations below, config/greeter.yaml and the tests all take it from
+#: here, so changing the wake word again is one line rather than a search.
+#:
+#: Spelled for an English TTS voice to read aloud. Whether it is *pronounced*
+#: so that a visitor repeating it wakes the robot can only be checked by
+#: listening to the robot, not by any test in this repository.
+WAKE_WORD = 'Lingxi Lingxi'
+
 #: Spoken by a TTS engine, so: plain words, no parentheses, no emoji, and the
 #: wake word kept intact and unpunctuated in the middle of the sentence.
 DEFAULT_INVITATIONS = (
-    'Say Hi Lumi and I will be happy to chat.',
-    'Call out Hi Lumi and we can have a proper conversation.',
-    'Just say Hi Lumi whenever you would like to talk.',
-    'If you fancy a chat, say Hi Lumi and I am all ears.',
-    'Say Hi Lumi and we can talk about whatever you like.',
+    f'Say {WAKE_WORD} and I will be happy to chat.',
+    f'Call out {WAKE_WORD} and we can have a proper conversation.',
+    f'Just say {WAKE_WORD} whenever you would like to talk.',
+    f'If you fancy a chat, say {WAKE_WORD} and I am all ears.',
+    f'Say {WAKE_WORD} and we can talk about whatever you like.',
 )
 
 
@@ -40,7 +50,7 @@ def append_invitation(greeting: str, invitations: Sequence[str],
     people to say a wake word.
 
     A blank greeting stays blank: SpeechDispatcher refuses to speak an empty
-    greeting, and turning "nothing to say" into "say Hi Lumi" would make the
+    greeting, and turning "nothing to say" into an invitation would make the
     robot address people the cloud has just decided are not there.
     """
     greeting = (greeting or '').strip()

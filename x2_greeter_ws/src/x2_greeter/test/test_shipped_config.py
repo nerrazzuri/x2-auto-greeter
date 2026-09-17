@@ -88,12 +88,24 @@ def test_the_greeter_speaks_at_the_vendor_default_priority():
 
 
 def test_the_shipped_invitations_name_the_wake_word():
+    from x2_greeter.core.invitation import WAKE_WORD
+
     invitations = _params()['speech']['wake_invitations']
     assert len(invitations) >= 4, 'one invitation repeated every time is not a choice'
     for phrase in invitations:
-        assert 'Hi Lumi' in phrase, (
+        assert WAKE_WORD in phrase, (
             f'{phrase!r} does not name the wake word, which is the only thing '
             'that opens a conversation on this robot')
+        assert 'lumi' not in phrase.lower(), f'{phrase!r} still names the old wake word'
+
+
+def test_the_shipped_invitations_are_the_code_defaults():
+    """Two copies of the same five sentences, one in YAML and one in Python.
+    A copy that is allowed to drift is the one nobody reads -- which is how a
+    robot ends up telling people a wake word it no longer answers to."""
+    from x2_greeter.core.invitation import DEFAULT_INVITATIONS
+
+    assert tuple(_params()['speech']['wake_invitations']) == DEFAULT_INVITATIONS
 
 
 def test_the_walking_gesture_list_is_a_subset_of_the_enabled_ones():

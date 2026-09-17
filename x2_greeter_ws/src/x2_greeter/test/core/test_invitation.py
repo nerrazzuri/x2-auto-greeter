@@ -1,12 +1,12 @@
 """Appending the wake-word invitation to a greeting."""
 import random
 
-from x2_greeter.core.invitation import DEFAULT_INVITATIONS, append_invitation
+from x2_greeter.core.invitation import DEFAULT_INVITATIONS, WAKE_WORD, append_invitation
 
 
 def test_an_invitation_is_appended_to_the_greeting():
-    out = append_invitation('Hello there!', ['Say Hi Lumi and I will be happy to chat.'])
-    assert out == 'Hello there! Say Hi Lumi and I will be happy to chat.'
+    out = append_invitation('Hello there!', ['Say Lingxi Lingxi and I will be happy to chat.'])
+    assert out == 'Hello there! Say Lingxi Lingxi and I will be happy to chat.'
 
 
 def test_one_invitation_is_chosen_from_the_list():
@@ -29,19 +29,26 @@ def test_blank_entries_are_ignored_rather_than_spoken():
 
 def test_a_blank_greeting_stays_blank():
     # SpeechDispatcher refuses an empty greeting, and turning "nothing to say"
-    # into "say Hi Lumi" would have the robot address somebody the cloud has
+    # into an invitation would have the robot address somebody the cloud has
     # just decided is not there.
     assert append_invitation('', DEFAULT_INVITATIONS) == ''
     assert append_invitation('   ', DEFAULT_INVITATIONS) == ''
 
 
 def test_the_greeting_is_stripped_before_joining():
-    assert append_invitation('  Hello.  ', ['Say Hi Lumi.']) == 'Hello. Say Hi Lumi.'
+    assert append_invitation('  Hello.  ', ['Say Lingxi Lingxi.']) == 'Hello. Say Lingxi Lingxi.'
 
 
 def test_every_shipped_invitation_names_the_wake_word():
     for phrase in DEFAULT_INVITATIONS:
-        assert 'Hi Lumi' in phrase, phrase
+        assert WAKE_WORD in phrase, phrase
+
+
+def test_the_old_wake_word_is_gone():
+    """Hi Lumi opens nothing on these robots any more. A visitor told to say
+    it says it, and walks away thinking the robot is broken."""
+    for phrase in DEFAULT_INVITATIONS:
+        assert 'lumi' not in phrase.lower(), phrase
 
 
 def test_the_shipped_invitations_are_speakable():

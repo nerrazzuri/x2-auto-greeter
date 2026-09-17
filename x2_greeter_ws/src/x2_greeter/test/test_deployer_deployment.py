@@ -38,7 +38,7 @@ SHIPPED_SITE = """\
       tier: auto
       phrases_file: ''
       wake_invitations:
-        - Say Hi Lumi and I will be happy to chat.
+        - Say Lingxi Lingxi and I will be happy to chat.
 """
 
 

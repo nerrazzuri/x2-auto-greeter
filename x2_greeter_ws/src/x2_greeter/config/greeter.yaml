@@ -149,12 +149,16 @@
       # word, and nothing in the served SDK can open one for it, so the
       # greeting ends by telling the person the words that do work. Set to an
       # empty list on a robot where that is not true.
+      # Must match core/invitation.py DEFAULT_INVITATIONS; a test holds them
+      # together. NOTE: a robot's site.yaml is seeded from this file once and
+      # never overwritten, so a robot already deployed keeps its old wake word
+      # until its site.yaml is edited or it is uninstalled and redeployed.
       wake_invitations:
-        - Say Hi Lumi and I will be happy to chat.
-        - Call out Hi Lumi and we can have a proper conversation.
-        - Just say Hi Lumi whenever you would like to talk.
-        - If you fancy a chat, say Hi Lumi and I am all ears.
-        - Say Hi Lumi and we can talk about whatever you like.
+        - Say Lingxi Lingxi and I will be happy to chat.
+        - Call out Lingxi Lingxi and we can have a proper conversation.
+        - Just say Lingxi Lingxi whenever you would like to talk.
+        - If you fancy a chat, say Lingxi Lingxi and I am all ears.
+        - Say Lingxi Lingxi and we can talk about whatever you like.
 
     gestures:
       enabled:
