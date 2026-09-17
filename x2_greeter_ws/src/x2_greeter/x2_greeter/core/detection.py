@@ -90,3 +90,23 @@ def gate_detections(raws: Sequence[RawDetection], rgb_shape: tuple,
         if best is None or abs(candidate.center_offset) < abs(best.center_offset):
             best = candidate
     return best
+
+
+def person_distances(raws: Sequence[RawDetection], rgb_shape: tuple,
+                     depth: Optional[np.ndarray], depth_scale: float,
+                     confidence_min: float) -> List[Optional[float]]:
+    """The distance of every confident person in frame, for the gesture interlock.
+
+    Deliberately none of gate_detections' other gates: somebody off to the
+    side, or already inside distance_min_m, is exactly who an arm can reach.
+    None marks a person whose distance could not be read -- the caller must
+    treat that as unknown, never as far away.
+    """
+    distances: List[Optional[float]] = []
+    for raw in raws:
+        if raw.confidence < confidence_min:
+            continue
+        if raw.bbox.width <= 0 or raw.bbox.height <= 0:
+            continue
+        distances.append(median_depth_m(depth, raw.bbox, rgb_shape, depth_scale))
+    return distances

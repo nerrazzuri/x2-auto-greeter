@@ -168,9 +168,14 @@ class McInputSourceRegistrar:
         return False
 
 
-def maybe_register(node, enabled: bool, name: str, priority: int, timeout_ms: int,
-                   callback_group=None) -> Optional[McInputSourceRegistrar]:
-    """Build and register a source, or return None when disabled or misconfigured.
+def build_registrar(node, enabled: bool, name: str, priority: int, timeout_ms: int,
+                    callback_group=None) -> Optional[McInputSourceRegistrar]:
+    """Build a registrar, or return None when disabled or misconfigured.
+
+    Does not register. Registering is a service call, and call_with_retry
+    waits on a future that only a *spinning* executor completes -- so it must
+    not run from a node's constructor, where nothing spins yet. GreetingNode
+    registers from a timer once it does.
 
     Never raises: a greeter that cannot register its input source should still
     come up and speak. Speech goes through the audio module, which arbitrates
@@ -187,5 +192,4 @@ def maybe_register(node, enabled: bool, name: str, priority: int, timeout_ms: in
     except PriorityOutOfBand as exc:
         node.get_logger().error(f'{exc} Not registering an input source.')
         return None
-    registrar.register()
     return registrar

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import random
+import signal
 import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 
@@ -20,38 +21,32 @@ from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallb
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.exceptions import ParameterUninitializedException
 from rclpy.node import Node
+from rclpy.signals import SignalHandlerOptions
 
 from x2_greeter.cognition.canned import DEFAULT_PHRASES, CannedBackend, load_phrases
 from x2_greeter.cognition.policy import GreetingPolicy
-from x2_greeter.core.detection import GateConfig, gate_detections
+from x2_greeter.core.detection import GateConfig, gate_detections, person_distances
 from x2_greeter.core.detectors import build_detector
 from x2_greeter.core.gestures import DEFAULT_ENABLED, GestureSelector
 from x2_greeter.core.imaging import to_jpeg_frame
 from x2_greeter.core.invitation import DEFAULT_INVITATIONS, append_invitation
 from x2_greeter.core.presence import PresenceConfig, PresenceState, PresenceTracker
+from x2_greeter.core.proximity import ProximityMonitor
 from x2_greeter.core.types import SceneContext
 from x2_greeter.ros.frame_source import FrameSource
 from x2_greeter.ros.gesture import GestureDispatcher
-from x2_greeter.ros.input_source import maybe_register
+from x2_greeter.ros.input_source import build_registrar
 from x2_greeter.ros.interaction_guard import InteractionGuard
 from x2_greeter.ros.mode_guard import LOCOMOTION, STAND, ModeGuard
 from x2_greeter.ros.speech import SpeechDispatcher
 from x2_greeter.ros.stereo_frame_source import StereoFrameSource
 
-#: The floor for the distance reading the node has, not a guarantee about
-#: where the greeted person actually is: gate_detections (core/detection.py)
-#: returns the most central gated detection, not the nearest, so a second
-#: person who stays gated further away can mask one who has stepped inside
-#: this floor. It is deliberately independent of detect.distance_min_m, which
-#: operators may lower to notice people who step closer -- but on the shipped
-#: config the two are equal, so the distance comparison here is unreachable:
-#: gate_detections has already rejected anything closer before this interlock
-#: sees it. The protection that actually fires in that configuration is
-#: staleness: a person who crosses inside this floor stops being gated, the
-#: latest reading ages past presence.loss_grace_s, and the gesture is refused
-#: on age. That makes presence.loss_grace_s load-bearing for this interlock,
-#: not just a responsiveness knob -- raising it weakens the arm's-reach
-#: protection under the shipped config.
+#: Nobody in view may be closer than this when an arm moves. Checked against
+#: every confident person detection (core/proximity.py), not the greeting
+#: target: gate_detections picks the most central person between
+#: detect.distance_min_m and distance_max_m, so its reading says nothing about
+#: somebody off to the side or already inside the gate's own minimum. Fixed,
+#: and deliberately independent of detect.distance_min_m.
 GESTURE_MIN_DISTANCE_M = 1.0
 
 
@@ -92,6 +87,9 @@ class GreetingNode(Node):
         # that it is safe to gesture, same reasoning as ModeGuard's refusal
         # when the mode service is unreachable.
         self._loss_grace_s = float(self._param('presence.loss_grace_s'))
+        # Everyone in view over the same window, for the arm's-reach floor.
+        # Guarded by _tracker_lock.
+        self.proximity = ProximityMonitor(GESTURE_MIN_DISTANCE_M, self._loss_grace_s)
         self.tracker = PresenceTracker(PresenceConfig(
             dwell_s=self._param('presence.dwell_s'),
             loss_grace_s=self._loss_grace_s,
@@ -139,10 +137,9 @@ class GreetingNode(Node):
             audio_file_count=int(self._param('speech.audio_file_count')),
             rng=rng,
             callback_group=self._callback_group)
-        # Registered before the first gesture can be dispatched: the arbiter
-        # discards commands from unknown sources. Failure is logged, never
-        # fatal -- see ros/input_source.py.
-        self.input_source = maybe_register(
+        # Built here, registered from _register_input_source once the executor
+        # spins -- see build_registrar. Failure is logged, never fatal.
+        self.input_source = build_registrar(
             self,
             enabled=bool(self._param('mc_input.enabled')),
             name=self._param('mc_input.name'),
@@ -170,6 +167,16 @@ class GreetingNode(Node):
         self._greeting_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='greeting')
         self._action_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='gesture')
         self._greeting_future = None
+
+        self._releasing = False
+        self._registration_future = None
+        self._startup_timer = None
+        if self.input_source is not None:
+            # A timer, because timers only fire once something spins the node.
+            # Its own mutually exclusive group so it cannot run twice at once.
+            self._startup_timer = self.create_timer(
+                0.1, self._register_input_source,
+                callback_group=MutuallyExclusiveCallbackGroup())
 
         source = str(self._param('camera.source')).strip().lower()
         if source == 'stereo':
@@ -366,13 +373,19 @@ class GreetingNode(Node):
 
         detection = gate_detections(raws, bgr.shape[:2], depth,
                                     self._depth_scale, self._gate_config)
+        distances = person_distances(raws, bgr.shape[:2], depth, self._depth_scale,
+                                     self._gate_config.confidence_min)
 
         now = self._now()
         with self._tracker_lock:
+            self.proximity.observe(now, distances)
             if detection is not None:
                 self._latest_reading = (now, detection.distance_m)
             to_confirm = self.tracker.update(now, detection)
         if to_confirm is None:
+            return
+
+        if self._releasing:
             return
 
         # A previous greeting is still in flight; the confirm timeout will
@@ -446,15 +459,21 @@ class GreetingNode(Node):
                 allowed = False
                 choice = self.selector.select(verdict.gesture)
             if allowed:
-                # This is the interlock itself, not belt and braces: it is a
-                # fixed safety floor, deliberately independent of the tunable
-                # detect.distance_min_m gate. ctx.distance_m was captured when
-                # the tracker entered CONFIRMING, up to the full cloud budget
-                # ago -- at walking pace someone can cross the floor in that
-                # window, so this reads the freshest distance instead.
+                # The interlock itself, not belt and braces. Two questions,
+                # both answered from frames within loss_grace_s rather than
+                # from ctx, which is up to the full cloud budget old.
+                #
+                # Is the greeted person still gated? Somebody who stepped
+                # inside the gate's minimum, or out of view, stops refreshing
+                # the reading.
+                #
+                # Is anybody at all inside the arm's-reach floor? Asked of
+                # every person detected, so the greeted person cannot mask a
+                # closer one.
                 now = self._now()
                 with self._tracker_lock:
                     reading = self._latest_reading
+                    clearance = self.proximity.clearance(now)
                 if reading is None or (now - reading[0]) > self._loss_grace_s:
                     age = f'{now - reading[0]:.2f}' if reading is not None else 'unknown'
                     self.get_logger().warning(
@@ -462,9 +481,8 @@ class GreetingNode(Node):
                         'not gesturing -- not knowing where the person is is not '
                         'knowing that it is safe')
                     allowed = False
-                elif reading[1] < GESTURE_MIN_DISTANCE_M:
-                    self.get_logger().warning(
-                        f'person at {reading[1]:.2f} m is too close to gesture')
+                elif not clearance.clear:
+                    self.get_logger().warning(f'not gesturing: {clearance.reason}')
                     allowed = False
 
             # The wake word is the only way into a conversation on this robot,
@@ -518,17 +536,57 @@ class GreetingNode(Node):
         except FutureTimeoutError:
             return False
 
+    # ------------------------------------------------------------- lifecycle
+
+    def _register_input_source(self) -> None:
+        """Runs once, from the startup timer, with the executor spinning."""
+        self._startup_timer.cancel()
+        if self._releasing or self._registration_future is not None:
+            return
+        # On the greeting worker rather than this executor thread: it blocks
+        # for up to a few seconds, and a greeting confirmed in the meantime
+        # queues behind it instead of gesturing before the source exists.
+        self._registration_future = self._greeting_pool.submit(self.input_source.register)
+
+    def release(self) -> None:
+        """Stop greeting and give the input source back. Safe to call twice.
+
+        Must run while the executor still spins: the DELETE is a service call,
+        and after executor.shutdown() nothing can deliver its response.
+
+        Does not wait for a greeting in flight. ros2 launch follows SIGINT with
+        SIGTERM after 5 s and SIGKILL after 10 s, less than a cloud call plus a
+        gesture, and the source must be back before that. A gesture issued
+        after the DELETE comes from an unknown source, which the controller
+        discards.
+        """
+        if self._releasing:
+            return
+        self._releasing = True
+        if self._startup_timer is not None:
+            self._startup_timer.cancel()
+        self._greeting_pool.shutdown(wait=False, cancel_futures=True)
+        self._action_pool.shutdown(wait=False, cancel_futures=True)
+        if self.input_source is None:
+            return
+        registration = self._registration_future
+        if registration is not None:
+            try:
+                registration.result(timeout=5.0)
+            except Exception:                          # noqa: BLE001 - deregister decides
+                pass
+        # So the next run gets a clean ADD rather than the restart path.
+        try:
+            self.input_source.deregister()
+        except Exception as exc:                       # noqa: BLE001 - shutdown
+            self.get_logger().warning(
+                f'could not release the input source: {type(exc).__name__}: {exc}')
+
     def destroy_node(self) -> bool:
+        # Normally already done by main(), while the executor still spun.
+        self.release()
         self._greeting_pool.shutdown(wait=True)
         self._action_pool.shutdown(wait=True)
-        # Give the source back, so the next run gets a clean ADD rather than
-        # the restart path. Best effort: we are already on the way out.
-        if getattr(self, 'input_source', None) is not None:
-            try:
-                self.input_source.deregister()
-            except Exception as exc:                   # noqa: BLE001 - shutdown
-                self.get_logger().warning(
-                    f'could not release the input source: {type(exc).__name__}: {exc}')
         return super().destroy_node()
 
 
@@ -566,17 +624,29 @@ class _LoggerShim:
 
 
 def main(args=None) -> None:
-    rclpy.init(args=args)
+    # rclpy's own SIGINT/SIGTERM handlers shut the context down the moment the
+    # signal lands, and a context that is shut down cannot make the DELETE that
+    # gives the input source back. So the signals only ask main to stop, and
+    # main releases the node while the executor is still spinning.
+    rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
+    stop = threading.Event()
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signum, lambda *_: stop.set())
+
     node = GreetingNode()
     executor = MultiThreadedExecutor()
     executor.add_node(node)
+    spinner = threading.Thread(target=executor.spin, name='executor', daemon=True)
+    spinner.start()
     try:
-        executor.spin()
-    except KeyboardInterrupt:
-        pass
+        # A timed wait, so the signal handler gets to run on this thread.
+        while spinner.is_alive() and not stop.wait(0.5):
+            pass
+        node.release()
     finally:
         executor.shutdown()
         node.destroy_node()
+        spinner.join(timeout=5.0)
         if rclpy.ok():
             rclpy.shutdown()
 

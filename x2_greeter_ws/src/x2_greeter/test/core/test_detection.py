@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from x2_greeter.core.detection import GateConfig, gate_detections, median_depth_m
+from x2_greeter.core.detection import GateConfig, gate_detections, median_depth_m, person_distances
 from x2_greeter.core.types import BBox, RawDetection
 
 RGB_SHAPE = (480, 640)  # (height, width)
@@ -124,3 +124,28 @@ def test_a_degenerate_box_is_rejected():
 
 def test_no_detections_yields_none():
     assert gate_detections([], RGB_SHAPE, uniform_depth(2000), 0.001, GateConfig()) is None
+
+
+# ------------------------------------------------- everyone, for the interlock
+
+def test_person_distances_reports_someone_too_close_to_greet():
+    raw = RawDetection(bbox=centred_box(), confidence=0.9)
+    got = person_distances([raw], RGB_SHAPE, uniform_depth(600), 0.001, 0.5)
+    assert got == [pytest.approx(0.6)]
+
+
+def test_person_distances_reports_someone_at_the_edge_of_frame():
+    raw = RawDetection(bbox=BBox(0, 90, 60, 390), confidence=0.9)
+    got = person_distances([raw], RGB_SHAPE, uniform_depth(700), 0.001, 0.5)
+    assert got == [pytest.approx(0.7)]
+
+
+def test_person_distances_reports_an_unreadable_distance_as_none():
+    raw = RawDetection(bbox=centred_box(), confidence=0.9)
+    assert person_distances([raw], RGB_SHAPE, uniform_depth(0), 0.001, 0.5) == [None]
+
+
+def test_person_distances_skips_low_confidence_and_degenerate_boxes():
+    faint = RawDetection(bbox=centred_box(), confidence=0.4)
+    flat = RawDetection(bbox=BBox(320, 240, 320, 240), confidence=0.9)
+    assert person_distances([faint, flat], RGB_SHAPE, uniform_depth(600), 0.001, 0.5) == []

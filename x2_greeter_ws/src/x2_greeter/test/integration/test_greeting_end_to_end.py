@@ -30,7 +30,8 @@ def ros():
     rclpy.shutdown()
 
 
-def build_rig(ros, robot_kwargs=None, extra_params=(), before_spin=None):
+def build_rig(ros, robot_kwargs=None, extra_params=(), before_spin=None,
+              prepare_robot=None):
     from rclpy.executors import MultiThreadedExecutor
     from rclpy.parameter import Parameter
 
@@ -40,6 +41,8 @@ def build_rig(ros, robot_kwargs=None, extra_params=(), before_spin=None):
     from x2_greeter.sim.fake_robot import FakeRobot
 
     robot = FakeRobot(publish_camera=True, **(robot_kwargs or {}))
+    if prepare_robot is not None:
+        prepare_robot(robot)
 
     overrides = [Parameter(name, value=value)
                  for name, value in list(FAST_PARAMS) + list(extra_params)]
@@ -66,6 +69,9 @@ def build_rig(ros, robot_kwargs=None, extra_params=(), before_spin=None):
 
 
 def teardown_rig(robot, node, executor, thread):
+    # The same order main() uses: release while the executor still spins, so
+    # the DELETE can be answered.
+    node.release()
     executor.shutdown()
     node.destroy_node()
     robot.destroy_node()
@@ -98,6 +104,47 @@ def test_a_person_in_front_gets_greeted_and_gestured_at(ros):
         assert spec.name in node.selector.enabled_names
         assert motion.area.value in spec.areas
         assert motion.interrupt is False
+    finally:
+        teardown_rig(robot, node, executor, thread)
+
+
+def test_the_input_source_is_registered_once_the_executor_spins(ros):
+    """Registration used to run inside the constructor, before anything was
+    spinning. call_with_retry waits on a future only a spinning executor can
+    complete, so every attempt timed out and the source was never added --
+    on every start, not just an unlucky one."""
+    robot, node, executor, thread = build_rig(ros)
+    try:
+        assert wait_until(lambda: robot.input_sources == {'x2_greeter': 30}, timeout_s=10.0),             f'never registered: {robot.input_sources}'
+        assert node.input_source.registered is True
+    finally:
+        teardown_rig(robot, node, executor, thread)
+
+
+def test_release_returns_the_input_source_while_the_executor_spins(ros):
+    """The DELETE is a service call too: made after executor.shutdown(), as
+    main() used to, it could only time out."""
+    from aimdk_msgs.msg import McInputAction
+
+    robot, node, executor, thread = build_rig(ros)
+    try:
+        assert wait_until(lambda: robot.input_sources == {'x2_greeter': 30}, timeout_s=10.0)
+        node.release()
+        assert robot.input_sources == {}
+        assert robot.input_source_requests[-1].action.value == McInputAction.INPUTACTION_DELETE
+        assert node.input_source.registered is False
+    finally:
+        teardown_rig(robot, node, executor, thread)
+
+
+def test_release_is_safe_to_call_twice(ros):
+    robot, node, executor, thread = build_rig(ros)
+    try:
+        assert wait_until(lambda: robot.input_sources == {'x2_greeter': 30}, timeout_s=10.0)
+        node.release()
+        sent = len(robot.input_source_requests)
+        node.release()
+        assert len(robot.input_source_requests) == sent
     finally:
         teardown_rig(robot, node, executor, thread)
 
@@ -502,6 +549,38 @@ def test_it_speaks_but_does_not_gesture_at_someone_within_arms_reach(ros):
         ros,
         robot_kwargs={'distance_mm': 700},
         extra_params=[('detect.distance_min_m', 0.3)])
+    try:
+        assert wait_until(lambda: bool(robot.tts_requests)), 'the robot never spoke'
+        assert node.wait_for_idle_worker(10.0)
+        assert robot.motion_requests == []
+    finally:
+        teardown_rig(robot, node, executor, thread)
+
+
+def test_no_gesture_while_somebody_else_stands_inside_arms_reach(ros):
+    """The greeted person must not mask a second person who is closer.
+
+    A stands centred at 1.6 m and passes every gate. B stands at the edge of
+    frame at 0.7 m, which the greeting gate rejects twice over (off-centre,
+    and inside the shipped detect.distance_min_m). Before the interlock looked
+    at everyone, A's fresh 1.6 m reading was all it saw, and the arm moved
+    next to B.
+    """
+    from x2_greeter.core.detectors import ScriptedDetector
+    from x2_greeter.core.types import BBox, RawDetection
+
+    def place_people(robot):
+        robot._depth[:] = 1600
+        robot._depth[:, 0:60] = 700
+
+    def two_people(node):
+        node.detector = ScriptedDetector([
+            RawDetection(bbox=BBox(270, 90, 370, 390), confidence=0.9),
+            RawDetection(bbox=BBox(0, 90, 60, 390), confidence=0.9),
+        ])
+
+    robot, node, executor, thread = build_rig(
+        ros, prepare_robot=place_people, before_spin=two_people)
     try:
         assert wait_until(lambda: bool(robot.tts_requests)), 'the robot never spoke'
         assert node.wait_for_idle_worker(10.0)

@@ -112,6 +112,49 @@ def test_it_delivers_nothing_when_only_rgb_is_published(ros):
         thread.join(timeout=5.0)
 
 
+def test_it_warns_when_colour_arrives_but_depth_never_does(ros):
+    """RGB at full rate must not keep the watchdog quiet: nothing is gated."""
+    import time
+
+    from rclpy.executors import MultiThreadedExecutor
+    from rclpy.qos import qos_profile_sensor_data
+    from cv_bridge import CvBridge
+    from sensor_msgs.msg import Image
+
+    from x2_greeter.ros.frame_source import FrameSource
+
+    publisher_node = ros.create_node('depth_dead_publisher')
+    consumer = ros.create_node('depth_dead_consumer')
+    warnings = []
+    logger = consumer.get_logger()
+    original_warning = logger.warning
+    logger.warning = lambda message, *a, **k: (warnings.append(message),
+                                                original_warning(message, *a, **k))
+    FrameSource(consumer, '/test/depth_dead_rgb', '/test/depth_dead_depth',
+                lambda *a: None, stale_warn_s=1.0)
+    pub = publisher_node.create_publisher(Image, '/test/depth_dead_rgb', qos_profile_sensor_data)
+
+    executor = MultiThreadedExecutor()
+    executor.add_node(publisher_node)
+    executor.add_node(consumer)
+    thread = threading.Thread(target=executor.spin, daemon=True)
+    thread.start()
+    try:
+        bridge = CvBridge()
+        deadline = time.monotonic() + 4.0
+        while time.monotonic() < deadline:
+            msg = bridge.cv2_to_imgmsg(np.zeros((48, 64, 3), dtype=np.uint8), encoding='bgr8')
+            msg.header.stamp = publisher_node.get_clock().now().to_msg()
+            pub.publish(msg)
+            time.sleep(0.05)
+        assert any('depth never arrived' in w for w in warnings), warnings
+    finally:
+        executor.shutdown()
+        consumer.destroy_node()
+        publisher_node.destroy_node()
+        thread.join(timeout=5.0)
+
+
 # ------------------------------------------------------- upside-down mounting
 
 def _asymmetric_pair():

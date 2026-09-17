@@ -14,6 +14,8 @@ from cv_bridge import CvBridge
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 
+from x2_greeter.core.stream_health import StreamHealth
+
 FrameCallback = Callable[[np.ndarray, Optional[np.ndarray], float], None]
 
 
@@ -40,14 +42,13 @@ class FrameSource:
         self._node = node
         self._on_frame = on_frame
         self._max_sync_skew_s = float(max_sync_skew_s)
-        self._stale_warn_s = float(stale_warn_s)
         self._rotate_180 = bool(rotate_180)
         self._bridge = CvBridge()
         self._latest_depth = None
         self._latest_depth_stamp = 0.0
         self._frames_seen = 0
-        self._last_rgb_at: Optional[float] = None
-        self._warned_stale = False
+        # Judged on pairs, not colour frames: see core/stream_health.py.
+        self._health = StreamHealth(stale_warn_s, started_at=self._now())
 
         self._rgb_sub = node.create_subscription(
             Image, rgb_topic, self._on_rgb, qos_profile_sensor_data,
@@ -80,6 +81,7 @@ class FrameSource:
         # arm's-reach interlock is made of.
         self._latest_depth = rotate_180(depth) if self._rotate_180 else depth
         self._latest_depth_stamp = _stamp_seconds(msg)
+        self._health.depth(self._now())
 
     def _on_rgb(self, msg: Image) -> None:
         try:
@@ -91,8 +93,8 @@ class FrameSource:
             bgr = rotate_180(bgr)
 
         stamp = _stamp_seconds(msg)
-        self._last_rgb_at = self._now()
-        self._warned_stale = False
+        now = self._now()
+        self._health.rgb(now)
 
         depth = self._latest_depth
         if depth is None or abs(stamp - self._latest_depth_stamp) > self._max_sync_skew_s:
@@ -101,17 +103,17 @@ class FrameSource:
             return
 
         self._frames_seen += 1
+        self._paired(now)
         self._on_frame(bgr, depth, stamp)
 
     def _check_stale(self) -> None:
-        if self._last_rgb_at is None:
-            return
-        if self._warned_stale:
-            return
-        if (self._now() - self._last_rgb_at) > self._stale_warn_s:
-            self._node.get_logger().warning(
-                f'no camera frame for over {self._stale_warn_s:.0f}s')
-            self._warned_stale = True
+        warning = self._health.check(self._now())
+        if warning is not None:
+            self._node.get_logger().warning(warning)
+
+    def _paired(self, now: float) -> None:
+        if self._health.pair(now):
+            self._node.get_logger().info('RGB-D frames are pairing again')
 
     def _now(self) -> float:
         return self._node.get_clock().now().nanoseconds * 1e-9

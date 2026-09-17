@@ -89,7 +89,7 @@ def test_a_controller_that_refuses_both_leaves_the_registrar_unregistered(rig):
 
 
 def test_a_refused_registration_does_not_raise(rig):
-    # The node must still come up and speak; see maybe_register's docstring.
+    # The node must still come up and speak; see build_registrar's docstring.
     robot, caller = rig
     robot.input_source_mode = 'refuse'
 
@@ -162,21 +162,21 @@ def test_priorities_outside_the_sdk_band_are_refused(priority):
         check_priority(priority)
 
 
-def test_maybe_register_returns_none_and_does_not_raise_on_a_bad_priority(rig):
+def test_build_registrar_returns_none_and_does_not_raise_on_a_bad_priority(rig):
     robot, caller = rig
-    from x2_greeter.ros.input_source import maybe_register
+    from x2_greeter.ros.input_source import build_registrar
 
-    assert maybe_register(caller, enabled=True, name='x2_greeter', priority=90,
-                          timeout_ms=1000) is None
+    assert build_registrar(caller, enabled=True, name='x2_greeter', priority=90,
+                           timeout_ms=1000) is None
     assert robot.input_source_requests == []
 
 
-def test_maybe_register_does_nothing_when_disabled(rig):
+def test_build_registrar_does_nothing_when_disabled(rig):
     robot, caller = rig
-    from x2_greeter.ros.input_source import maybe_register
+    from x2_greeter.ros.input_source import build_registrar
 
-    assert maybe_register(caller, enabled=False, name='x2_greeter', priority=30,
-                          timeout_ms=1000) is None
+    assert build_registrar(caller, enabled=False, name='x2_greeter', priority=30,
+                           timeout_ms=1000) is None
     assert robot.input_source_requests == []
 
 
@@ -194,3 +194,16 @@ def test_an_unreachable_service_is_not_treated_as_registered(ros):
         assert reg.registered is False
     finally:
         caller.destroy_node()
+
+
+def test_build_registrar_does_not_call_the_controller(rig):
+    """Building happens in the node's constructor, where nothing spins yet;
+    registering is the node's job once it does."""
+    robot, caller = rig
+    from x2_greeter.ros.input_source import build_registrar
+
+    reg = build_registrar(caller, enabled=True, name='x2_greeter', priority=30,
+                          timeout_ms=1000)
+    assert reg is not None
+    assert reg.registered is False
+    assert robot.input_source_requests == []
